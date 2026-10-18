@@ -1,0 +1,76 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${project.minecraft_version}-${project.forge_version}"
+}
+
+minecraft {
+    mappings channel: 'official', version: project.minecraft_version
+}
+
+sourceSets {
+    main {
+        ext.refMap = "easytier_go.refmap.json"
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = "UTF-8"
+    it.options.release = 17
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("META-INF/mods.toml") {
+        expand "version": project.version
+    }
+    // 确保资源文件使用UTF-8编码
+    filteringCharset = 'UTF-8'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+    withSourcesJar()
+}
+
+jar {
+    manifest {
+        attributes([
+                "Specification-Title"     : project.archives_base_name,
+                "Specification-Vendor"    : "easytier",
+                "Specification-Version"   : "1",
+                "Implementation-Title"    : project.name,
+                "Implementation-Version"  : project.jar.archiveVersion,
+                "Implementation-Vendor"   : "easytier",
+                "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ])
+    }
+}
+
+jar.finalizedBy('reobfJar')
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifact jar
+        }
+    }
+    repositories {
+    }
+}

@@ -1,0 +1,30 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+issueTrackerURL="https://github.com/EasyTier/Minecraft-Mod/issues"
+
+[[mods]]
+modId="easytier_go"
+version="${version}"
+displayName="EasyTier Go"
+authors="EasyTier"
+logoFile="logo.png"
+logoBlur=false
+description='''
+通过 EasyTier CLI 实现 Minecraft 远程去中心化联机，无需公网 IP 或端口映射。
+基于 EasyTier 的虚拟局域网技术，玩家可以在"对局域网开放"界面中一键配置并启动虚拟网络。
+'''
+
+[[dependencies.easytier_go]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.easytier_go]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1]"
+    ordering="NONE"
+    side="BOTH"

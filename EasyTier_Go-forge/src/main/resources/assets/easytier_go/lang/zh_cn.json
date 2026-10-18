@@ -1,0 +1,7 @@
+{
+  "screen.easytier.title": "EasyTier 联机配置",
+  "screen.easytier.button.open": "EasyTier",
+  "screen.easytier.status.running": "运行中",
+  "screen.easytier.status.stopped": "已停止",
+  "command.easytier.usage": "用法: /easytier start <网络名称> <中继服务器> [密码] [版本]"
+}
