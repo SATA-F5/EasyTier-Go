@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "easytier-go",
+  "version": "${version}",
+  "name": "Easytier Go",
+  "description": "通过 EasyTier CLI 实现 Minecraft 远程去中心化联机，无需公网 IP 或端口映射",
+  "authors": [
+    "Easytier Go"
+  ],
+  "contact": {
+    "homepage": "https://modrinth.com/project/easytier-go",
+    "sources": "https://github.com/SATA-F5/EasyTier_Go",
+    "modrinth": "https://modrinth.com/project/easytier-go",
+    "github": "https://github.com/SATA-F5/EasyTier_Go"
+  },
+  "license": "MIT",
+  "icon": "assets/easytier-go/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.easytier.fabric.lan.EasyTierFabricLan"
+    ],
+    "client": [
+      "com.easytier.fabric.lan.EasyTierFabricLanClient"
+    ]
+  },
+  "mixins": [
+    "easytier-go.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.20.1",
+    "java": ">=17",
+    "fabric-api": "*"
+  }
+}

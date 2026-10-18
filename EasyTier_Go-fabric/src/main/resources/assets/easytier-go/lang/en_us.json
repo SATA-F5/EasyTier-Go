@@ -1,0 +1,7 @@
+{
+  "screen.easytier.title": "EasyTier LAN Config",
+  "screen.easytier.button.open": "EasyTier",
+  "screen.easytier.status.running": "Running",
+  "screen.easytier.status.stopped": "Stopped",
+  "command.easytier.usage": "Usage: /easytier start <network_name> <relay_server> [secret] [version]"
+}

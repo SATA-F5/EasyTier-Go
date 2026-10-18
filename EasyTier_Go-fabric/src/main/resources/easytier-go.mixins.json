@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "package": "com.easytier.fabric.lan.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [],
+  "client": [
+    "GameMenuScreenMixin",
+    "AddServerScreenMixin",
+    "DirectConnectScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
