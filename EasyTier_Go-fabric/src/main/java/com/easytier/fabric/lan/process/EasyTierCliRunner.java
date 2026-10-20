@@ -57,6 +57,13 @@ public class EasyTierCliRunner {
     }
 
     /**
+     * 执行 easytier-cli peer list --output json，返回 JSON 格式的节点列表
+     */
+    public String peerListJson() {
+        return run("peer", "list", "--output", "json");
+    }
+
+    /**
      * 执行 easytier-cli route，返回原始输出
      */
     public String route() {

@@ -15,6 +15,8 @@ import java.util.regex.Pattern;
 
 /**
  * EasyTier CLI 命令封装
+ * 统一处理进程调用、超时（5秒）、UTF-8 编码和输出解析
+ * 所有 CLI 命令指定 --rpc-portal 127.0.0.1:<port>
  */
 public class EasyTierCliRunner {
 
@@ -23,6 +25,7 @@ public class EasyTierCliRunner {
     private int rpcPort = 15888;
     private static final int TIMEOUT_SECONDS = 5;
 
+    // 用于从 easytier-cli node 输出中提取虚拟 IP
     private static final Pattern IPV4_PATTERN = Pattern.compile(
             "\\b(?:(?:25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\.){3}(?:25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\b");
 
@@ -39,35 +42,69 @@ public class EasyTierCliRunner {
         return rpcPort;
     }
 
+    /**
+     * 执行 easytier-cli node，返回原始输出
+     */
     public String node() {
         return run("node");
     }
 
+    /**
+     * 执行 easytier-cli peer，返回原始输出
+     */
     public String peer() {
         return run("peer");
     }
 
+    /**
+     * 执行 easytier-cli peer list --output json，返回 JSON 格式的节点列表
+     */
+    public String peerListJson() {
+        return run("peer", "list", "--output", "json");
+    }
+
+    /**
+     * 执行 easytier-cli route，返回原始输出
+     */
     public String route() {
         return run("route");
     }
 
+    /**
+     * 添加端口转发
+     * 封装: easytier-cli port-forward add <proto> 0.0.0.0:<bindPort> <virtualIp>:<mcPort>
+     */
     public String portForwardAdd(String protocol, int bindPort, String virtualIp, int mcPort) {
         return run("port-forward", "add", protocol,
                 "0.0.0.0:" + bindPort, virtualIp + ":" + mcPort);
     }
 
+    /**
+     * 移除端口转发
+     * 封装: easytier-cli port-forward remove <proto> 0.0.0.0:<bindPort>
+     */
     public String portForwardRemove(String protocol, int bindPort) {
         return run("port-forward", "remove", protocol, "0.0.0.0:" + bindPort);
     }
 
+    /**
+     * 列出端口转发规则
+     */
     public String portForwardList() {
         return run("port-forward", "list");
     }
 
+    /**
+     * 查看 WireGuard 门户信息（可选）
+     */
     public String vpnPortal() {
         return run("vpn-portal");
     }
 
+    /**
+     * 从 node 输出中提取虚拟 IP
+     * @return 虚拟 IP 字符串，未找到返回 null
+     */
     public String extractVirtualIp(String nodeOutput) {
         if (nodeOutput == null || nodeOutput.isEmpty()) {
             return null;
@@ -75,6 +112,7 @@ public class EasyTierCliRunner {
         Matcher matcher = IPV4_PATTERN.matcher(nodeOutput);
         while (matcher.find()) {
             String ip = matcher.group();
+            // 排除 0.0.0.0, 127.0.0.1 等
             if (!ip.equals("0.0.0.0") && !ip.equals("127.0.0.1")
                     && !ip.startsWith("255.") && !ip.startsWith("224.")) {
                 return ip;
@@ -83,11 +121,19 @@ public class EasyTierCliRunner {
         return null;
     }
 
+    /**
+     * 获取当前虚拟 IP（执行 node 命令并解析）
+     */
     public String getVirtualIp() {
         String output = node();
         return extractVirtualIp(output);
     }
 
+    /**
+     * 执行 CLI 命令
+     * @param args 命令参数（不含可执行文件和 --rpc-portal）
+     * @return 合并后的 stdout/stderr 输出
+     */
     public String run(String... args) {
         if (cliBinary == null) {
             return "错误: easytier-cli 路径未设置";

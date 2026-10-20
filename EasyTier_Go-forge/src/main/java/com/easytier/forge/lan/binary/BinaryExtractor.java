@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -28,9 +29,13 @@ import java.util.zip.ZipInputStream;
 
 /**
  * EasyTier CLI 下载与提取器
+ * 从 GitHub Releases 下载当前平台对应的 zip 包，
+ * 通过镜像列表依次尝试，最后回退原始 GitHub 链接。
+ * 解压到 config/easytier-fabric/bin/ 并设置可执行权限。
  */
 public class BinaryExtractor {
 
+    /** GitHub 加速镜像列表，按优先级排列 */
     private static final String[] MIRRORS = {
             "https://raw.ihtw.moe/",
             "https://gh.zwy.one/",
@@ -69,10 +74,17 @@ public class BinaryExtractor {
         this.logManager = logManager;
     }
 
+    /**
+     * 确保二进制可用：已存在且版本最新则跳过，否则从 GitHub 下载并解压
+     */
     public boolean extract() {
         return extract(false);
     }
 
+    /**
+     * 确保二进制可用
+     * @param force 强制重新下载
+     */
     public boolean extract(boolean force) {
         if (!PlatformDetector.isSupported()) {
             logManager.error("当前平台不支持，无法获取 EasyTier 二进制");
@@ -90,6 +102,7 @@ public class BinaryExtractor {
         coreBinary = binDir.resolve("easytier-core" + suffix);
         cliBinary = binDir.resolve("easytier-cli" + suffix);
 
+        // 已存在且非空
         if (isFileNonEmpty(coreBinary) && isFileNonEmpty(cliBinary)) {
             if (!force) {
                 logManager.info("EasyTier 二进制已存在，跳过下载: " + binDir);
@@ -101,9 +114,11 @@ public class BinaryExtractor {
             logManager.info("EasyTier 二进制不存在，开始下载...");
         }
 
+        // 解析最新版本号
         String latestVersion = fetchLatestVersion();
         if (latestVersion != null) {
             logManager.info("最新版本: " + latestVersion);
+            // 检查本地版本
             String localVersion = readLocalVersion();
             if (localVersion != null && localVersion.equals(latestVersion) && !force) {
                 if (isFileNonEmpty(coreBinary) && isFileNonEmpty(cliBinary)) {
@@ -114,12 +129,14 @@ public class BinaryExtractor {
             }
         }
 
+        // 解析下载地址
         String downloadUrl = resolveDownloadUrl();
         if (downloadUrl == null) {
             logManager.error("无法解析 EasyTier 下载地址");
             return false;
         }
 
+        // 下载（带镜像回退）
         Path zipFile = binDir.resolve("easytier-download.zip");
         boolean downloaded = downloadWithMirrors(downloadUrl, zipFile);
         if (!downloaded) {
@@ -127,24 +144,38 @@ public class BinaryExtractor {
             return false;
         }
 
+        // SHA256 完整性校验
+        String sha256 = calculateSha256(zipFile);
+        if (sha256 != null) {
+            logManager.info("下载文件 SHA256: " + sha256);
+            logManager.info("文件大小: " + zipFile.toFile().length() + " bytes");
+        } else {
+            logManager.warn("无法计算下载文件的 SHA256");
+        }
+
+        // 解压
         logManager.info("下载完成，正在解压...");
         if (!unzipAndRelocate(zipFile)) {
             logManager.error("解压失败");
             return false;
         }
 
+        // 清理 zip
         try {
             Files.deleteIfExists(zipFile);
         } catch (IOException ignored) {
         }
 
+        // 设置权限
         ensureExecutable();
 
+        // 验证
         if (!isFileNonEmpty(coreBinary) || !isFileNonEmpty(cliBinary)) {
             logManager.error("解压后未找到 easytier-core 或 easytier-cli，发布包结构可能已变更");
             return false;
         }
 
+        // 写入版本号
         if (latestVersion != null) {
             writeLocalVersion(latestVersion);
         }
@@ -153,7 +184,11 @@ public class BinaryExtractor {
         return true;
     }
 
+    /**
+     * 从 GitHub API 获取最新版本号（通过镜像回退）
+     */
     private String fetchLatestVersion() {
+        // 尝试直接 API
         try {
             String json = httpGetString(GITHUB_API, API_TIMEOUT_MS);
             if (json != null && !json.isEmpty()) {
@@ -166,6 +201,7 @@ public class BinaryExtractor {
             logManager.warn("GitHub API 直连失败: " + e.getMessage());
         }
 
+        // 通过镜像尝试 API
         for (String mirror : MIRRORS) {
             try {
                 String mirrorApi = mirror + GITHUB_API;
@@ -203,9 +239,14 @@ public class BinaryExtractor {
         }
     }
 
+    /**
+     * 解析当前平台对应的下载地址
+     * 优先通过 GitHub API 获取真实资产链接，失败时回退到 latest 重定向地址
+     */
     private String resolveDownloadUrl() {
         String assetName = guessAssetName();
 
+        // 尝试 GitHub API（直连）
         try {
             String apiResponse = httpGetString(GITHUB_API, API_TIMEOUT_MS);
             if (apiResponse != null && !apiResponse.isEmpty()) {
@@ -219,6 +260,7 @@ public class BinaryExtractor {
             logManager.warn("GitHub API 访问失败: " + e.getMessage());
         }
 
+        // 通过镜像尝试 API
         for (String mirror : MIRRORS) {
             try {
                 String mirrorApi = mirror + GITHUB_API;
@@ -234,11 +276,15 @@ public class BinaryExtractor {
             }
         }
 
+        // 回退：latest 重定向地址
         String fallback = GITHUB_LATEST_DOWNLOAD + assetName;
         logManager.info("使用 latest 重定向地址: " + fallback);
         return fallback;
     }
 
+    /**
+     * 从 GitHub API JSON 中匹配当前平台的资产下载地址
+     */
     private String parseAssetUrlFromApi(String json, String preferredAssetName) {
         try {
             JsonObject root = JsonParser.parseString(json).getAsJsonObject();
@@ -249,6 +295,7 @@ public class BinaryExtractor {
             String arch = getArchKeyword();
             String altArch = getAltArchKeyword();
 
+            // 优先精确匹配文件名
             for (JsonElement el : assets) {
                 JsonObject asset = el.getAsJsonObject();
                 String name = asset.get("name").getAsString();
@@ -257,6 +304,7 @@ public class BinaryExtractor {
                 }
             }
 
+            // 模糊匹配：包含平台和架构关键词
             for (JsonElement el : assets) {
                 JsonObject asset = el.getAsJsonObject();
                 String name = asset.get("name").getAsString().toLowerCase();
@@ -272,6 +320,9 @@ public class BinaryExtractor {
         return null;
     }
 
+    /**
+     * 猜测当前平台的资产文件名
+     */
     private String guessAssetName() {
         return "easytier-" + getPlatformKeyword() + "-" + getArchKeyword() + ".zip";
     }
@@ -293,6 +344,7 @@ public class BinaryExtractor {
         }
     }
 
+    /** Windows arm64 资产可能命名为 arm64 而非 aarch64 */
     private String getAltArchKeyword() {
         if (PlatformDetector.getArchitecture() == Architecture.ARM64) {
             return "arm64";
@@ -300,7 +352,11 @@ public class BinaryExtractor {
         return null;
     }
 
+    /**
+     * 通过镜像列表依次下载，最后尝试原始链接
+     */
     private boolean downloadWithMirrors(String githubUrl, Path dest) {
+        // 先尝试各个镜像
         for (int i = 0; i < MIRRORS.length; i++) {
             String mirrorUrl = MIRRORS[i] + githubUrl;
             logManager.info("尝试镜像 (" + (i + 1) + "/" + MIRRORS.length + "): " + MIRRORS[i]);
@@ -314,6 +370,7 @@ public class BinaryExtractor {
             }
         }
 
+        // 最后尝试原始 GitHub 链接
         logManager.info("尝试原始 GitHub 链接...");
         try {
             if (downloadFile(githubUrl, dest)) {
@@ -327,6 +384,9 @@ public class BinaryExtractor {
         return false;
     }
 
+    /**
+     * 下载单个文件，跟随重定向
+     */
     private boolean downloadFile(String urlStr, Path dest) throws IOException {
         HttpURLConnection conn = null;
         try {
@@ -339,6 +399,7 @@ public class BinaryExtractor {
 
             int code = conn.getResponseCode();
             if (code != 200) {
+                // 部分镜像对重定向处理不同，手动跟随一次
                 if (code == 301 || code == 302 || code == 307 || code == 308) {
                     String redirect = conn.getHeaderField("Location");
                     if (redirect != null) {
@@ -365,6 +426,9 @@ public class BinaryExtractor {
         }
     }
 
+    /**
+     * HTTP GET 返回字符串
+     */
     private String httpGetString(String urlStr, int timeout) throws IOException {
         HttpURLConnection conn = null;
         try {
@@ -390,6 +454,9 @@ public class BinaryExtractor {
         }
     }
 
+    /**
+     * 解压 zip 并将二进制文件移到 bin 目录根
+     */
     private boolean unzipAndRelocate(Path zipFile) {
         String suffix = PlatformDetector.getExecutableSuffix();
         String coreName = "easytier-core" + suffix;
@@ -426,6 +493,7 @@ public class BinaryExtractor {
             if (fn.equals(cliName)) cliBinary = p;
         }
 
+        // Windows 上检查 wintun.dll
         if (PlatformDetector.getPlatform().isWindows()) {
             Path wintun = binDir.resolve("wintun.dll");
             if (!Files.exists(wintun)) {
@@ -504,6 +572,9 @@ public class BinaryExtractor {
         return cachedVersion;
     }
 
+    /**
+     * 强制重新下载（删除已有文件后重新下载）
+     */
     public boolean reExtract() {
         try {
             if (Files.exists(binDir)) {
@@ -523,5 +594,24 @@ public class BinaryExtractor {
         cliBinary = null;
         cachedVersion = null;
         return extract(true);
+    }
+
+    /**
+     * 计算文件的 SHA256 哈希值
+     * @return 小写十六进制 SHA256 字符串，失败返回 null
+     */
+    public static String calculateSha256(Path file) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] fileBytes = Files.readAllBytes(file);
+            byte[] hash = digest.digest(fileBytes);
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

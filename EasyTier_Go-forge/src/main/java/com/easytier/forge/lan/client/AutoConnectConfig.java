@@ -13,6 +13,7 @@ import java.util.Map;
 
 /**
  * 多人游戏自动连接配置
+ * 存储每个服务器地址对应的 EasyTier 自动连接设置
  */
 public class AutoConnectConfig {
 

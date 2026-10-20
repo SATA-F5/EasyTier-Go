@@ -15,9 +15,12 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * 配置文件管理器
+ * 负责扫描、加载、保存、删除 configs/ 下的 TOML 配置
+ * 配置列表和版本列表通过扫描目录动态生成，不维护额外索引文件
  */
 public class ConfigManager {
 
@@ -45,6 +48,10 @@ public class ConfigManager {
         return baseDir;
     }
 
+    /**
+     * 扫描所有 TOML 配置，按网络名称分组
+     * key = 网络名称（instance_name），value = 该网络的所有版本（按版本号升序）
+     */
     public Map<String, List<TomlConfig>> scanAllConfigs() {
         Map<String, List<TomlConfig>> result = new LinkedHashMap<>();
         if (!Files.exists(configsDir)) {
@@ -59,6 +66,7 @@ public class ConfigManager {
                 }
                 String name = cfg.getInstanceName();
                 if (name == null || name.isEmpty()) {
+                    // 从文件名解析
                     String[] parsed = FileSanitizer.parseFileName(file.getFileName().toString());
                     if (parsed != null) {
                         name = parsed[0];
@@ -73,6 +81,7 @@ public class ConfigManager {
             LOGGER.error("扫描配置目录失败: {}", e.getMessage());
         }
 
+        // 每个网络内按版本排序
         for (List<TomlConfig> list : result.values()) {
             list.sort((a, b) -> {
                 Version va = a.getVersion();
@@ -87,15 +96,24 @@ public class ConfigManager {
         return result;
     }
 
+    /**
+     * 获取所有网络名称列表
+     */
     public List<String> listNetworkNames() {
         return new ArrayList<>(scanAllConfigs().keySet());
     }
 
+    /**
+     * 获取指定网络的所有版本
+     */
     public List<TomlConfig> getVersions(String networkName) {
         Map<String, List<TomlConfig>> all = scanAllConfigs();
         return all.getOrDefault(networkName, Collections.emptyList());
     }
 
+    /**
+     * 获取指定网络的最新版本
+     */
     public TomlConfig getLatestVersion(String networkName) {
         List<TomlConfig> versions = getVersions(networkName);
         if (versions.isEmpty()) {
@@ -104,12 +122,18 @@ public class ConfigManager {
         return versions.get(versions.size() - 1);
     }
 
+    /**
+     * 根据网络名称和版本加载配置
+     */
     public TomlConfig loadConfig(String networkName, Version version) {
         String fileName = FileSanitizer.sanitize(networkName) + "_" + version.toString() + ".toml";
         Path file = configsDir.resolve(fileName);
         return loadConfig(file);
     }
 
+    /**
+     * 从文件加载配置
+     */
     public TomlConfig loadConfig(Path file) {
         if (!Files.exists(file)) {
             return null;
@@ -119,6 +143,7 @@ public class ConfigManager {
             TomlConfig config = TomlParser.parse(content);
             config.setSourceFileName(file.getFileName().toString());
 
+            // 从文件名补充版本（如果 TOML 注释中没有）
             if (config.getVersion() == null) {
                 String[] parsed = FileSanitizer.parseFileName(file.getFileName().toString());
                 if (parsed != null) {
@@ -129,6 +154,7 @@ public class ConfigManager {
                 }
             }
 
+            // 字段缺失时用默认值补全（仅内存，不写盘）
             if (config.getDevName() == null || config.getDevName().isEmpty()) {
                 config.setDevName("et_forge");
                 LOGGER.warn("配置 {} 缺少 dev_name，使用默认值 et_forge", file.getFileName());
@@ -152,6 +178,10 @@ public class ConfigManager {
         }
     }
 
+    /**
+     * 保存配置为指定版本
+     * 如果文件已存在则覆盖
+     */
     public boolean saveConfig(TomlConfig config) {
         if (config.getVersion() == null) {
             config.setVersion(new Version(1, 0));
@@ -169,6 +199,10 @@ public class ConfigManager {
         }
     }
 
+    /**
+     * 保存为次版本 +1 的新版本
+     * 返回新版本号
+     */
     public Version saveAsNewVersion(TomlConfig config) {
         TomlConfig latest = getLatestVersion(config.getNetworkName());
         Version newVersion;
@@ -184,6 +218,10 @@ public class ConfigManager {
         return null;
     }
 
+    /**
+     * 删除指定网络的指定版本
+     * 如果是该网络最后一个版本，则等价删除整个网络配置
+     */
     public boolean deleteConfig(String networkName, Version version) {
         String fileName = FileSanitizer.sanitize(networkName) + "_" + version.toString() + ".toml";
         Path file = configsDir.resolve(fileName);
@@ -200,6 +238,9 @@ public class ConfigManager {
         }
     }
 
+    /**
+     * 删除指定网络的所有版本
+     */
     public int deleteNetwork(String networkName) {
         List<TomlConfig> versions = getVersions(networkName);
         int count = 0;
@@ -211,11 +252,17 @@ public class ConfigManager {
         return count;
     }
 
+    /**
+     * 检查配置文件是否存在
+     */
     public boolean configExists(String networkName, Version version) {
         String fileName = FileSanitizer.sanitize(networkName) + "_" + version.toString() + ".toml";
         return Files.exists(configsDir.resolve(fileName));
     }
 
+    /**
+     * 获取指定网络的下一个可用版本号
+     */
     public Version getNextVersion(String networkName) {
         TomlConfig latest = getLatestVersion(networkName);
         if (latest != null && latest.getVersion() != null) {
@@ -224,6 +271,11 @@ public class ConfigManager {
         return new Version(1, 0);
     }
 
+    // ==================== active.json 管理 ====================
+
+    /**
+     * 读取 active.json
+     */
     public ActiveConfig readActive() {
         Path file = baseDir.resolve("active.json");
         if (!Files.exists(file)) {
@@ -238,6 +290,9 @@ public class ConfigManager {
         }
     }
 
+    /**
+     * 写入 active.json
+     */
     public boolean writeActive(ActiveConfig active) {
         Path file = baseDir.resolve("active.json");
         try {
@@ -249,6 +304,9 @@ public class ConfigManager {
         }
     }
 
+    /**
+     * active.json 数据结构
+     */
     public static class ActiveConfig {
         public String network_name;
         public String version;

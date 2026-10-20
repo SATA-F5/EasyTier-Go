@@ -340,6 +340,42 @@ public class EasyTierConfigScreen extends Screen {
             return;
         }
 
+        // 下载知情同意：如果 EasyTier 二进制不存在，先询问用户
+        if (!service.getProcessManager().isBinaryReady()) {
+            showDownloadConfirm(name, relay);
+            return;
+        }
+
+        doStart(name, relay);
+    }
+
+    /**
+     * 显示下载确认对话框
+     */
+    private void showDownloadConfirm(String name, String relay) {
+        if (this.client == null) return;
+        net.minecraft.client.gui.screen.ConfirmScreen confirm = new net.minecraft.client.gui.screen.ConfirmScreen(
+                confirmed -> {
+                    if (confirmed) {
+                        appendLog("[INFO] 用户已同意下载 EasyTier CLI");
+                        doStart(name, relay);
+                    } else {
+                        appendLog("[INFO] 用户取消下载");
+                        this.client.setScreen(this);
+                    }
+                },
+                Text.literal("需要下载 EasyTier CLI"),
+                Text.literal("首次使用需要从 GitHub 下载 EasyTier 核心程序（约 10-20MB）。\n"
+                        + "下载源：GitHub Releases（通过 13 个镜像加速，最后回退原链接）。\n"
+                        + "下载后将进行 SHA256 完整性校验。\n\n"
+                        + "是否继续？"),
+                Text.literal("确认下载"),
+                Text.literal("取消")
+        );
+        this.client.setScreen(confirm);
+    }
+
+    private void doStart(String name, String relay) {
         Version version = new Version(1, 0);
         String secret = networkSecretField.getText().trim();
         String devName = devNameField.getText().trim();

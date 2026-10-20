@@ -14,6 +14,7 @@ import java.util.function.Consumer;
 /**
  * 日志管理器
  * 同时写入文件和推送到 UI 回调
+ * 日志分级：INFO / WARN / ERROR
  */
 public class LogManager {
 
@@ -38,6 +39,13 @@ public class LogManager {
         }
     }
 
+    /**
+     * 开始一个新的日志文件
+     * @param name 网络名称（sanitize 后）
+     * @param version 版本字符串
+     * @param isServer 是否服务端
+     * @param worldName 服务端世界名（仅服务端）
+     */
     public void startNewLog(String name, String version, boolean isServer, String worldName) {
         String date = DATE_FMT.format(LocalDateTime.now());
         String fileName;
@@ -78,6 +86,7 @@ public class LogManager {
         String time = TIME_FMT.format(LocalDateTime.now());
         String line = "[" + time + "] [" + level + "] " + msg;
 
+        // 写入缓冲区
         synchronized (buffer) {
             buffer.add(line);
             while (buffer.size() > MAX_BUFFER) {
@@ -85,16 +94,18 @@ public class LogManager {
             }
         }
 
+        // 写入文件
         if (currentLogFile != null) {
             try {
                 Files.writeString(currentLogFile, line + System.lineSeparator(),
                         StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             } catch (IOException e) {
-                // 静默失败
+                // 静默失败，不影响主流程
             }
         }
 
+        // 推送到 UI
         if (uiCallback != null) {
             try {
                 uiCallback.accept(line);
@@ -103,6 +114,9 @@ public class LogManager {
         }
     }
 
+    /**
+     * 记录原始进程输出（不加时间戳和级别前缀，但仍写文件和推 UI）
+     */
     public void raw(String msg) {
         synchronized (buffer) {
             buffer.add(msg);

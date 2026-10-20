@@ -48,6 +48,13 @@ public class EasyTierProcessManager {
         return cliRunner;
     }
 
+    /**
+     * 检查 EasyTier 二进制是否已准备好
+     */
+    public boolean isBinaryReady() {
+        return binaryExtractor.isReady();
+    }
+
     public boolean isRunning() {
         return running.get() && currentProcess != null && currentProcess.isAlive();
     }
@@ -114,11 +121,13 @@ public class EasyTierProcessManager {
         this.currentConfig = config;
 
         try {
-            // 构建启动命令：仅 -c 参数
+            // 构建启动命令：-c 配置文件 + 显式 no-tun/smoltcp（命令行覆盖配置文件）
             List<String> cmd = new ArrayList<>();
             cmd.add(binaryExtractor.getCoreBinary().toString());
             cmd.add("-c");
             cmd.add(configFile.toString());
+            cmd.add("--no-tun");
+            cmd.add("--use-smoltcp");
 
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(binaryExtractor.getBinDir().toFile());

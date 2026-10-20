@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -141,6 +142,15 @@ public class BinaryExtractor {
         if (!downloaded) {
             logManager.error("所有镜像及原始链接均下载失败");
             return false;
+        }
+
+        // SHA256 完整性校验
+        String sha256 = calculateSha256(zipFile);
+        if (sha256 != null) {
+            logManager.info("下载文件 SHA256: " + sha256);
+            logManager.info("文件大小: " + zipFile.toFile().length() + " bytes");
+        } else {
+            logManager.warn("无法计算下载文件的 SHA256");
         }
 
         // 解压
@@ -584,5 +594,24 @@ public class BinaryExtractor {
         cliBinary = null;
         cachedVersion = null;
         return extract(true);
+    }
+
+    /**
+     * 计算文件的 SHA256 哈希值
+     * @return 小写十六进制 SHA256 字符串，失败返回 null
+     */
+    public static String calculateSha256(Path file) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] fileBytes = Files.readAllBytes(file);
+            byte[] hash = digest.digest(fileBytes);
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

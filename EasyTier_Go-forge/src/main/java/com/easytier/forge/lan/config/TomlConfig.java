@@ -2,9 +2,11 @@ package com.easytier.forge.lan.config;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 /**
  * EasyTier TOML 配置模型
+ * 对应 config.toml 的完整字段
  */
 public class TomlConfig {
 
@@ -29,6 +31,10 @@ public class TomlConfig {
         this.listeners.add("wg://0.0.0.0:11011");
     }
 
+    /**
+     * 生成 32 位 UUID（无连字符）作为 instance_id
+     * EasyTier 要求 instance_id 为 UUID simple format（32 位十六进制）
+     */
     public static String generateInstanceId() {
         return java.util.UUID.randomUUID().toString().replace("-", "");
     }
@@ -137,6 +143,9 @@ public class TomlConfig {
         this.sourceFileName = sourceFileName;
     }
 
+    /**
+     * 计算磁盘文件名: <sanitize(network_name)>_<version>.toml
+     */
     public String toFileName() {
         String safe = FileSanitizer.sanitize(networkName);
         String ver = version != null ? version.toString() : "v1.0";

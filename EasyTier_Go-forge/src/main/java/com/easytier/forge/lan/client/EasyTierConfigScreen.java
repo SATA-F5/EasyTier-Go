@@ -4,20 +4,18 @@ import com.easytier.forge.lan.EasyTierService;
 import com.easytier.forge.lan.config.FileSanitizer;
 import com.easytier.forge.lan.config.TomlConfig;
 import com.easytier.forge.lan.config.Version;
-import net.minecraft.Util;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.StringWidget;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.Util;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * EasyTier 联机配置界面（自适应布局）
- */
 public class EasyTierConfigScreen extends Screen {
 
     private final Screen parent;
@@ -139,7 +137,6 @@ public class EasyTierConfigScreen extends Screen {
         int addrY = addrAreaY + 2;
         forwardAddressText = new StringWidget(addrAreaX + 3, addrY, addrAreaW - 6, fLabelH,
                 Component.literal("转发地址: 未获取虚拟IP"), this.font);
-        forwardAddressText.alignLeft();
         this.addRenderableWidget(forwardAddressText);
         addrY += fLabelH + 2;
 
@@ -154,11 +151,9 @@ public class EasyTierConfigScreen extends Screen {
 
         statusText = new StringWidget(rx, ry, halfW, fLabelH,
                 Component.literal("状态: 检测中..."), this.font);
-        statusText.alignLeft();
         this.addRenderableWidget(statusText);
         fileNameText = new StringWidget(rx + halfW + fGap, ry, halfW, fLabelH,
                 Component.literal(""), this.font);
-        fileNameText.alignLeft();
         this.addRenderableWidget(fileNameText);
         ry += fLabelH + fGap * 2;
 
@@ -182,8 +177,8 @@ public class EasyTierConfigScreen extends Screen {
         devNameField.setMaxLength(32);
         addLabelDyn(rx + halfW + fGap, ry - fLabelH - 1, "虚拟端口", halfW, fLabelH);
         virtualPortField = addTextFieldDyn(rx + halfW + fGap, ry, halfW, fFieldH, "25565");
-        virtualPortField.setNumericOnly(true);
         virtualPortField.setMaxLength(5);
+        virtualPortField.setNumericOnly(true);
         virtualPortField.setValue("25565");
         ry += fFieldH + fGap;
 
@@ -197,7 +192,6 @@ public class EasyTierConfigScreen extends Screen {
 
         currentInstanceId = TomlConfig.generateInstanceId();
         updateFileNamePreview();
-
         refreshConfigList();
 
         int btnY1 = this.height - BTN_ROW_H * 2 - fGap * 2 - 2;
@@ -228,7 +222,7 @@ public class EasyTierConfigScreen extends Screen {
             service.cleanupAllProcesses();
             appendLog("[INFO] 已执行清理所有 EasyTier 进程");
         });
-        addButtonDyn(MARGIN + (btnW5 + fGap) * 4, btnY2, btnW5, BTN_ROW_H, "关闭", btn -> onCloseButton());
+        addButtonDyn(MARGIN + (btnW5 + fGap) * 4, btnY2, btnW5, BTN_ROW_H, "关闭", btn -> onClose());
 
         service.getLogManager().setUiCallback(line -> {
             synchronized (logLines) {
@@ -310,6 +304,38 @@ public class EasyTierConfigScreen extends Screen {
             return;
         }
 
+        if (!service.getProcessManager().isBinaryReady()) {
+            showDownloadConfirm(name, relay);
+            return;
+        }
+
+        doStart(name, relay);
+    }
+
+    private void showDownloadConfirm(String name, String relay) {
+        if (this.minecraft == null) return;
+        ConfirmScreen confirm = new ConfirmScreen(
+                confirmed -> {
+                    if (confirmed) {
+                        appendLog("[INFO] 用户已同意下载 EasyTier CLI");
+                        doStart(name, relay);
+                    } else {
+                        appendLog("[INFO] 用户取消下载");
+                        this.minecraft.setScreen(this);
+                    }
+                },
+                Component.literal("需要下载 EasyTier CLI"),
+                Component.literal("首次使用需要从 GitHub 下载 EasyTier 核心程序（约 10-20MB）。\n"
+                        + "下载源：GitHub Releases（通过 13 个镜像加速，最后回退原链接）。\n"
+                        + "下载后将进行 SHA256 完整性校验。\n\n"
+                        + "是否继续？"),
+                Component.literal("确认下载"),
+                Component.literal("取消")
+        );
+        this.minecraft.setScreen(confirm);
+    }
+
+    private void doStart(String name, String relay) {
         Version version = new Version(1, 0);
         String secret = networkSecretField.getValue().trim();
         String devName = devNameField.getValue().trim();
@@ -451,13 +477,11 @@ public class EasyTierConfigScreen extends Screen {
                     appendLog("[WARN] 自动端口转发：虚拟IP分配超时，请手动点击刷新后再应用端口转发");
                     return;
                 }
-
                 int mcPort = getMinecraftPort();
                 if (mcPort <= 0) {
                     appendLog("[INFO] 自动端口转发：未检测到 Minecraft 局域网端口（请先对局域网开放），跳过自动转发");
                     return;
                 }
-
                 int vPort = 25565;
                 String vPortStr = virtualPortField != null ? virtualPortField.getValue().trim() : "";
                 if (!vPortStr.isEmpty()) {
@@ -472,7 +496,6 @@ public class EasyTierConfigScreen extends Screen {
                         appendLog("[WARN] 自动端口转发：虚拟端口格式错误 '" + vPortStr + "'，使用默认 25565");
                     }
                 }
-
                 boolean ok = service.getProcessManager().addPortForward("tcp", vPort, ip, mcPort);
                 if (ok) {
                     appendLog("[INFO] 自动端口转发成功: tcp 0.0.0.0:" + vPort + " -> " + ip + ":" + mcPort);
@@ -527,18 +550,8 @@ public class EasyTierConfigScreen extends Screen {
         }
     }
 
-    private void onCloseButton() {
-        if (service.isRunning()) {
-            appendLog("[INFO] EasyTier 将在后台继续运行");
-        }
-        service.getLogManager().setUiCallback(null);
-        if (this.minecraft != null) {
-            this.minecraft.setScreen(this.parent);
-        }
-    }
-
     private void onPortForwardToggle(boolean enabled) {
-        virtualPortField.setEditable(enabled);
+        virtualPortField.active = enabled;
         if (applyPortForwardBtn != null) {
             applyPortForwardBtn.active = enabled && service.isRunning();
         }
@@ -630,7 +643,6 @@ public class EasyTierConfigScreen extends Screen {
     private int addLabelDyn(int x, int y, String text, int w, int labelH) {
         StringWidget widget = new StringWidget(x, y, w, labelH,
                 Component.literal(text), this.font);
-        widget.alignLeft();
         this.addRenderableWidget(widget);
         return y + labelH + 1;
     }
@@ -650,8 +662,8 @@ public class EasyTierConfigScreen extends Screen {
     }
 
     private <T> CycleButton<T> addCyclingDyn(int x, int y, int w, int h,
-                                              List<T> values, T initial, String key,
-                                              CycleButton.OnValueChange<T> callback) {
+                                             List<T> values, T initial, String key,
+                                             CycleButton.OnValueChange<T> callback) {
         CycleButton<T> btn = CycleButton.<T>builder(val -> Component.literal(val.toString()))
                 .withValues(values)
                 .withInitialValue(initial)
@@ -682,9 +694,9 @@ public class EasyTierConfigScreen extends Screen {
     }
 
     @Override
-    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float delta) {
-        this.renderBackground(guiGraphics);
-        guiGraphics.drawCenteredString(this.font, this.title, this.width / 2, 6, 0xFFFFFF);
+    public void render(GuiGraphics context, int mouseX, int mouseY, float delta) {
+        this.renderBackground(context);
+        context.drawCenteredString(this.font, this.title, this.width / 2, 6, 0xFFFFFF);
 
         if (statusText != null) {
             boolean running = service.isRunning();
@@ -694,31 +706,30 @@ public class EasyTierConfigScreen extends Screen {
             statusText.setColor(statusColor);
         }
 
-        super.render(guiGraphics, mouseX, mouseY, delta);
+        super.render(context, mouseX, mouseY, delta);
 
-        renderLogArea(guiGraphics);
+        renderLogArea(context);
 
         if (configList != null) {
             int titleY = configList.getTopY() - LOG_TITLE_H - 1;
-            guiGraphics.fill(logX, titleY, logX + logW, titleY + LOG_TITLE_H, 0xFF1A1A1A);
-            drawBorder(guiGraphics, logX, titleY, logW, LOG_TITLE_H, 0xFF333333);
-            guiGraphics.drawString(this.font, "配置列表", logX + 4, titleY + 2, LABEL_COLOR, false);
+            context.fill(logX, titleY, logX + logW, titleY + LOG_TITLE_H, 0xFF1A1A1A);
+            context.fill(logX, titleY, logX + logW, titleY + 1, 0xFF333333);
+            context.fill(logX, titleY + LOG_TITLE_H - 1, logX + logW, titleY + LOG_TITLE_H, 0xFF333333);
+            context.fill(logX, titleY, logX + 1, titleY + LOG_TITLE_H, 0xFF333333);
+            context.fill(logX + logW - 1, titleY, logX + logW, titleY + LOG_TITLE_H, 0xFF333333);
+            context.drawString(this.font, "配置列表", logX + 4, titleY + 2, LABEL_COLOR, false);
         }
     }
 
-    private void drawBorder(GuiGraphics guiGraphics, int x, int y, int w, int h, int color) {
-        guiGraphics.fill(x, y, x + w, y + 1, color);
-        guiGraphics.fill(x, y + h - 1, x + w, y + h, color);
-        guiGraphics.fill(x, y, x + 1, y + h, color);
-        guiGraphics.fill(x + w - 1, y, x + w, y + h, color);
-    }
+    private void renderLogArea(GuiGraphics context) {
+        context.fill(logX, logY, logX + logW, logY + logH, LOG_BG);
+        context.fill(logX, logY, logX + logW, logY + 1, 0xFF444444);
+        context.fill(logX, logY + logH - 1, logX + logW, logY + logH, 0xFF444444);
+        context.fill(logX, logY, logX + 1, logY + logH, 0xFF444444);
+        context.fill(logX + logW - 1, logY, logX + logW, logY + logH, 0xFF444444);
 
-    private void renderLogArea(GuiGraphics guiGraphics) {
-        guiGraphics.fill(logX, logY, logX + logW, logY + logH, LOG_BG);
-        drawBorder(guiGraphics, logX, logY, logW, logH, 0xFF444444);
-
-        guiGraphics.fill(logX, logY, logX + logW, logY + LOG_TITLE_H, 0xFF1A1A1A);
-        guiGraphics.drawString(this.font, "运行日志", logX + 4, logY + 2, 0xAAAAAA, false);
+        context.fill(logX, logY, logX + logW, logY + LOG_TITLE_H, 0xFF1A1A1A);
+        context.drawString(this.font, "运行日志", logX + 4, logY + 2, 0xAAAAAA, false);
 
         if (errorMessage != null && !errorMessage.isEmpty()) {
             long elapsed = System.currentTimeMillis() - errorMessageTime;
@@ -727,7 +738,7 @@ public class EasyTierConfigScreen extends Screen {
                 int errColor = blink ? 0xFFFF5555 : 0xFFAA0000;
                 String errLabel = "错误!";
                 int labelW = this.font.width(errLabel);
-                guiGraphics.drawString(this.font, errLabel, logX + logW - labelW - 4, logY + 2, errColor, false);
+                context.drawString(this.font, errLabel, logX + logW - labelW - 4, logY + 2, errColor, false);
             } else {
                 errorMessage = null;
             }
@@ -742,7 +753,7 @@ public class EasyTierConfigScreen extends Screen {
         if (logHScroll > maxHScroll) logHScroll = maxHScroll;
         if (logHScroll < 0) logHScroll = 0;
 
-        guiGraphics.enableScissor(logX, textTop, logX + logW, textTop + textH);
+        context.enableScissor(logX, textTop, logX + logW, textTop + textH);
         try {
             synchronized (logLines) {
                 int startIdx = Math.max(0, logLines.size() - visibleLines - logVScroll);
@@ -754,12 +765,12 @@ public class EasyTierConfigScreen extends Screen {
                     if (line.contains("[ERROR]")) color = 0xFF5555;
                     else if (line.contains("[WARN]")) color = 0xFFAA00;
                     else if (line.contains("[INFO]")) color = 0x55FF55;
-                    guiGraphics.drawString(this.font, line, logX + 3 - logHScroll, drawY, color, false);
+                    context.drawString(this.font, line, logX + 3 - logHScroll, drawY, color, false);
                     drawY += lineH;
                 }
             }
         } finally {
-            guiGraphics.disableScissor();
+            context.disableScissor();
         }
 
         int totalLines = logLines.size();
@@ -769,8 +780,8 @@ public class EasyTierConfigScreen extends Screen {
             int scrollbarH = textH;
             int thumbH = Math.max(8, (int) ((long) scrollbarH * visibleLines / totalLines));
             int thumbY = scrollbarY + (int) ((long) (scrollbarH - thumbH) * logVScroll / Math.max(1, totalLines - visibleLines));
-            guiGraphics.fill(scrollbarX, scrollbarY, scrollbarX + SCROLLBAR_W, scrollbarY + scrollbarH, 0xFF333333);
-            guiGraphics.fill(scrollbarX, thumbY, scrollbarX + SCROLLBAR_W, thumbY + thumbH, 0xFF666666);
+            context.fill(scrollbarX, scrollbarY, scrollbarX + SCROLLBAR_W, scrollbarY + scrollbarH, 0xFF333333);
+            context.fill(scrollbarX, thumbY, scrollbarX + SCROLLBAR_W, thumbY + thumbH, 0xFF666666);
         }
 
         if (logMaxLineWidth > logW - 8) {
@@ -779,8 +790,8 @@ public class EasyTierConfigScreen extends Screen {
             int hScrollbarW = logW - 4;
             int hThumbW = Math.max(20, (int) ((long) hScrollbarW * (logW - 8) / logMaxLineWidth));
             int hThumbX = hScrollbarX + (int) ((long) (hScrollbarW - hThumbW) * logHScroll / Math.max(1, maxHScroll));
-            guiGraphics.fill(hScrollbarX, hScrollbarY, hScrollbarX + hScrollbarW, hScrollbarY + SCROLLBAR_W, 0xFF333333);
-            guiGraphics.fill(hThumbX, hScrollbarY, hThumbX + hThumbW, hScrollbarY + SCROLLBAR_W, 0xFF666666);
+            context.fill(hScrollbarX, hScrollbarY, hScrollbarX + hScrollbarW, hScrollbarY + SCROLLBAR_W, 0xFF333333);
+            context.fill(hThumbX, hScrollbarY, hThumbX + hThumbW, hScrollbarY + SCROLLBAR_W, 0xFF666666);
         }
     }
 

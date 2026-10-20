@@ -19,6 +19,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * EasyTier 核心服务
+ * 整合配置管理、二进制提取、进程管理和 CLI 调用，
+ * 为客户端 UI 和服务端命令提供统一的高层接口
  */
 public class EasyTierService {
 
@@ -125,11 +127,15 @@ public class EasyTierService {
         return result;
     }
 
+    /**
+     * 异步刷新节点数量
+     */
     public void refreshPeerCountAsync() {
         executor.submit(() -> {
             try {
                 String output = processManager.getCliRunner().peer();
                 if (output != null) {
+                    // 简单统计 peer 输出中的行数（排除表头）
                     String[] lines = output.split("\\r?\\n");
                     int count = 0;
                     for (String line : lines) {
@@ -145,14 +151,24 @@ public class EasyTierService {
         });
     }
 
+    /**
+     * 平台是否支持
+     */
     public boolean isPlatformSupported() {
         return PlatformDetector.isSupported();
     }
 
+    /**
+     * 是否为 Android
+     */
     public boolean isAndroid() {
         return PlatformDetector.isAndroid();
     }
 
+    /**
+     * 启动 EasyTier
+     * 按"名称+版本"搜索文件，存在则读取，不存在则生成
+     */
     public boolean start(String networkName, Version version, String relayServer,
                          String networkSecret, String devName, boolean dhcp) {
         try {
@@ -180,6 +196,7 @@ public class EasyTierService {
             return false;
         }
 
+        // 校验必填
         if (networkName == null || networkName.trim().isEmpty()) {
             logManager.error("网络名称不能为空");
             return false;
@@ -201,11 +218,13 @@ public class EasyTierService {
                 return false;
             }
             logManager.info("加载已有配置: " + config.toFileName());
+            // 重新保存配置，确保新增字段（如 smoltcp）写入配置文件
             config.setNetworkSecret(networkSecret);
             config.setDevName(devName);
             config.setRelayServer(relayServer);
             configManager.saveConfig(config);
         } else {
+            // 生成新配置
             config = new TomlConfig();
             config.setNetworkName(networkName);
             config.setInstanceName(networkName);
@@ -221,11 +240,13 @@ public class EasyTierService {
             logManager.info("生成新配置: " + config.toFileName());
         }
 
+        // 启动新日志文件
         String safeName = com.easytier.forge.lan.config.FileSanitizer.sanitize(networkName);
         logManager.startNewLog(safeName, version.toString(), false, null);
         logManager.info("配置文件: " + config.toFileName());
         logManager.info("启动配置: " + networkName + " @ " + version + " (" + config.toFileName() + ")");
 
+        // 启动进程
         Path configFile = configManager.getConfigsDir().resolve(config.toFileName());
         logManager.info("调用进程管理器启动...");
         boolean result = processManager.start(config, configFile);
@@ -241,6 +262,9 @@ public class EasyTierService {
         return result;
     }
 
+    /**
+     * 停止 EasyTier
+     */
     public void stop() {
         processManager.stop();
         this.currentNetworkName = "";
@@ -252,11 +276,18 @@ public class EasyTierService {
         logManager.info("EasyTier 已停止");
     }
 
+    /**
+     * 清理所有残留的 easytier-core 进程
+     */
     public void cleanupAllProcesses() {
         processManager.cleanupAllProcesses();
         logManager.info("已清理所有 EasyTier 进程");
     }
 
+    /**
+     * 异步启动 EasyTier（不阻塞 UI 线程）
+     * 返回 CompletableFuture，完成时包含启动结果
+     */
     public CompletableFuture<Boolean> startAsync(String networkName, Version version, String relayServer,
                                                   String networkSecret, String devName, boolean dhcp) {
         if (pendingStart.get() != null && !pendingStart.get().isDone()) {
@@ -269,10 +300,16 @@ public class EasyTierService {
         return future;
     }
 
+    /**
+     * 异步停止 EasyTier
+     */
     public CompletableFuture<Void> stopAsync() {
         return CompletableFuture.runAsync(this::stop, executor);
     }
 
+    /**
+     * 异步刷新虚拟 IP 和节点信息
+     */
     public CompletableFuture<String> refreshAsync() {
         return CompletableFuture.supplyAsync(() -> {
             String ip = processManager.refreshVirtualIp();
@@ -283,6 +320,9 @@ public class EasyTierService {
         }, executor);
     }
 
+    /**
+     * 异步确保二进制已下载
+     */
     public CompletableFuture<Boolean> ensureBinaryAsync() {
         return CompletableFuture.supplyAsync(() -> {
             if (binaryExtractor.isReady()) return true;
@@ -295,30 +335,51 @@ public class EasyTierService {
         return f != null && !f.isDone();
     }
 
+    /**
+     * 获取当前虚拟 IP
+     */
     public String getVirtualIp() {
         return processManager.getVirtualIp();
     }
 
+    /**
+     * 刷新虚拟 IP
+     */
     public String refreshVirtualIp() {
         return processManager.refreshVirtualIp();
     }
 
+    /**
+     * 是否运行中
+     */
     public boolean isRunning() {
         return processManager.isRunning();
     }
 
+    /**
+     * 获取所有网络名称
+     */
     public List<String> listNetworks() {
         return configManager.listNetworkNames();
     }
 
+    /**
+     * 获取指定网络的所有版本
+     */
     public List<TomlConfig> listVersions(String networkName) {
         return configManager.getVersions(networkName);
     }
 
+    /**
+     * 获取指定网络的最新版本
+     */
     public TomlConfig getLatestVersion(String networkName) {
         return configManager.getLatestVersion(networkName);
     }
 
+    /**
+     * 扫描所有配置
+     */
     public Map<String, List<TomlConfig>> scanAllConfigs() {
         return configManager.scanAllConfigs();
     }

@@ -75,9 +75,11 @@ public final class TomlGenerator {
         sb.append("uri = \"").append(normalizeRelayUri(config.getRelayServer())).append("\"")
                 .append(System.lineSeparator());
 
-        // flags：启用 smoltcp 用户态协议栈，避免 Windows 上需要管理员权限创建 TUN 设备
+        // flags：不创建 TUN 设备，使用 smoltcp 用户态协议栈
+        // 避免 Windows 上需要管理员权限创建 Wintun/TUN 设备
         sb.append(System.lineSeparator());
         sb.append("[flags]").append(System.lineSeparator());
+        sb.append("no_tun = true").append(System.lineSeparator());
         sb.append("use_smoltcp = true").append(System.lineSeparator());
 
         return sb.toString();

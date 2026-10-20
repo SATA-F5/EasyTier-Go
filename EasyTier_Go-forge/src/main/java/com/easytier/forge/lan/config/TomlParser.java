@@ -6,13 +6,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 轻量级 TOML 解析器，仅支持 EasyTier 配置使用的子集
+ * 轻量级 TOML 解析器，仅支持 EasyTier 配置使用的子集：
+ * - 顶层 key = "value" / key = true / key = 123
+ * - [section] 下的 key = value
+ * - [[array_of_tables]] 下的 key = value
+ * - key = [ "a", "b" ] 数组
+ * - # 注释（顶部注释中提取 version）
  */
 public final class TomlParser {
 
     private TomlParser() {
     }
 
+    /**
+     * 解析 TOML 文本为 TomlConfig
+     */
     public static TomlConfig parse(String content) {
         TomlConfig config = new TomlConfig();
         if (content == null || content.isEmpty()) {
@@ -35,6 +43,7 @@ public final class TomlParser {
             for (String rawLine : lines) {
                 String line = rawLine.trim();
 
+                // 提取顶部注释中的 version
                 if (line.startsWith("#")) {
                     String commentContent = line.substring(1).trim();
                     if (commentContent.startsWith("version")) {
@@ -55,6 +64,7 @@ public final class TomlParser {
                     continue;
                 }
 
+                // section header
                 if (line.startsWith("[[") && line.endsWith("]]")) {
                     currentSection = line.substring(2, line.length() - 2).trim();
                     inArrayTable = true;
@@ -66,6 +76,7 @@ public final class TomlParser {
                     continue;
                 }
 
+                // key = value
                 int eq = line.indexOf('=');
                 if (eq < 0) {
                     continue;
@@ -73,6 +84,7 @@ public final class TomlParser {
                 String key = line.substring(0, eq).trim();
                 String value = line.substring(eq + 1).trim();
 
+                // 数组值 listeners = [ ... ]（可能跨多行，这里只处理单行）
                 if (value.startsWith("[")) {
                     String arrayContent = extractArrayContent(content, line, rawLine);
                     listeners = parseStringArray(arrayContent);
@@ -92,6 +104,7 @@ public final class TomlParser {
                 }
             }
 
+            // 填充 config
             config.setInstanceName(topLevel.getOrDefault("instance_name", ""));
             config.setInstanceId(topLevel.getOrDefault("instance_id", TomlConfig.generateInstanceId()));
             config.setDhcp(Boolean.parseBoolean(topLevel.getOrDefault("dhcp", "true")));
@@ -105,17 +118,20 @@ public final class TomlParser {
 
             config.setNetworkName(networkIdentity.getOrDefault("network_name", ""));
             config.setNetworkSecret(networkIdentity.getOrDefault("network_secret", ""));
+            // dev_name 优先从顶层读取，兼容旧格式从 [flags] 读取
             String devName = topLevel.get("dev_name");
             if (devName == null || devName.isEmpty()) {
-                devName = flags.getOrDefault("dev_name", "et_forge");
+                devName = flags.getOrDefault("dev_name", "et_fabric");
             }
             config.setDevName(devName);
 
             String peerUri = peer.get("uri");
             if (peerUri != null) {
+                // 去掉 tcp:// 前缀存储原始中继地址
                 config.setRelayServer(stripProtocol(peerUri));
             }
 
+            // 版本优先从注释取，其次从文件名
             if (versionFromComment != null) {
                 Version v = Version.parse(versionFromComment);
                 if (v != null) {
@@ -124,6 +140,7 @@ public final class TomlParser {
             }
             config.setGeneratedTimestamp(generatedFromComment);
 
+            // 校验关键字段
             if (config.getNetworkName().isEmpty() && config.getInstanceName().isEmpty()) {
                 config.setCorrupted(true);
             }
@@ -135,12 +152,16 @@ public final class TomlParser {
         return config;
     }
 
+    /**
+     * 从内容中提取数组的完整内容（处理跨行数组）
+     */
     private static String extractArrayContent(String fullContent, String firstLine, String rawFirstLine) {
         if (firstLine.contains("]")) {
             int start = firstLine.indexOf('[');
             int end = firstLine.indexOf(']', start);
             return firstLine.substring(start + 1, end);
         }
+        // 跨行数组
         int contentIdx = fullContent.indexOf(rawFirstLine);
         if (contentIdx < 0) {
             return "";

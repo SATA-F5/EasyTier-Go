@@ -21,6 +21,9 @@ public final class PlatformDetector {
     private PlatformDetector() {
     }
 
+    /**
+     * 执行探测并缓存结果。可重复调用，首次之后直接返回缓存。
+     */
     public static synchronized void detect() {
         if (detectedPlatform != null) {
             return;
@@ -31,6 +34,7 @@ public final class PlatformDetector {
         String osName = rawOsName.toLowerCase();
         String osArch = rawOsArch.toLowerCase();
 
+        // Android 检测（满足任一即判定）
         boolean android = false;
         if (osName.contains("android")) {
             android = true;
@@ -51,6 +55,7 @@ public final class PlatformDetector {
         }
         isAndroid = android;
 
+        // 平台判定
         if (android) {
             detectedPlatform = Platform.UNSUPPORTED;
         } else if (osName.contains("win")) {
@@ -63,22 +68,24 @@ public final class PlatformDetector {
             detectedPlatform = Platform.UNSUPPORTED;
         }
 
+        // 架构判定
         if (osArch.equals("amd64") || osArch.equals("x86_64")) {
             detectedArch = Architecture.X86_64;
         } else if (osArch.equals("aarch64") || osArch.equals("arm64")) {
             detectedArch = Architecture.ARM64;
         } else if (osArch.equals("x86") || osArch.equals("i386") || osArch.equals("i686")) {
+            // 32 位 x86 不支持
             detectedArch = Architecture.UNSUPPORTED;
         } else {
             detectedArch = Architecture.UNSUPPORTED;
         }
 
         if (android) {
-            LOGGER.error("EasyTier Forge LAN 不支持 Android 平台。"
+            LOGGER.error("EasyTier Fabric LAN 不支持 Android 平台。"
                     + "EasyTier 在 Android 上需要 VpnService/Magisk 集成，无法通过桌面 CLI 方式调用。"
                     + "替代方案：在 Android 上使用 EasyTier 官方应用建立虚拟网络，然后在 Minecraft 中直接连接虚拟 IP。");
         } else if (detectedPlatform == Platform.UNSUPPORTED || detectedArch == Architecture.UNSUPPORTED) {
-            LOGGER.error("EasyTier Forge LAN 不支持当前平台：os.name='{}', os.arch='{}'。"
+            LOGGER.error("EasyTier Fabric LAN 不支持当前平台：os.name='{}', os.arch='{}'。"
                     + "支持的平台：Windows 10/11 (x86_64/arm64)、Linux glibc (x86_64/aarch64)、macOS 12+ (x86_64/aarch64)。",
                     rawOsName, rawOsArch);
         } else {
@@ -119,10 +126,16 @@ public final class PlatformDetector {
         return rawOsArch;
     }
 
+    /**
+     * 获取当前平台可执行文件后缀（Windows 为 .exe，其他为空）
+     */
     public static String getExecutableSuffix() {
         return getPlatform().isWindows() ? ".exe" : "";
     }
 
+    /**
+     * 获取二进制资源目录相对路径，如 "easytier/windows-x86_64"
+     */
     public static String getBinaryResourcePath() {
         if (!isSupported()) {
             return null;
