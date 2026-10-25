@@ -22,6 +22,28 @@ dependencies {
 
 minecraft {
     mappings channel: 'official', version: project.minecraft_version
+
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                easytier_go {
+                    source sourceSets.main
+                }
+            }
+        }
+        server {
+            workingDirectory project.file('run')
+            args '--nogui'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                easytier_go {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
 }
 
 sourceSets {
@@ -61,6 +83,10 @@ jar {
                 "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
         ])
     }
+    from("LICENSE") {
+        rename { "${it}_${project.archives_base_name}" }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 jar.finalizedBy('reobfJar')

@@ -24,7 +24,6 @@ public abstract class GameMenuScreenMixin extends Screen {
 
     @Inject(method = "init", at = @At("TAIL"))
     private void addEasyTierButton(CallbackInfo ci) {
-        System.out.println("[EasyTier DEBUG] GameMenuScreenMixin.addEasyTierButton called!");
         PlatformDetector.detect();
         if (!PlatformDetector.isSupported()) {
             return;

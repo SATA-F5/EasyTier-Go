@@ -80,32 +80,4 @@ public final class FileSanitizer {
 
         return result;
     }
-
-    /**
-     * 从文件名解析网络名称和版本
-     * 文件名格式: <sanitized_name>_v<major>.<minor>.toml
-     * 从右往左匹配最后一段 v<数字>.<数字>
-     *
-     * @return 长度为2的数组: [sanitizedName, versionString]，解析失败返回 null
-     */
-    public static String[] parseFileName(String fileName) {
-        if (fileName == null || !fileName.endsWith(".toml")) {
-            return null;
-        }
-        String base = fileName.substring(0, fileName.length() - 5);
-        // 从右往左匹配 _v\d+\.\d+
-        int lastUnderscore = base.lastIndexOf('_');
-        if (lastUnderscore <= 0) {
-            return null;
-        }
-        String versionPart = base.substring(lastUnderscore + 1);
-        if (!versionPart.matches("v\\d+\\.\\d+")) {
-            return null;
-        }
-        String namePart = base.substring(0, lastUnderscore);
-        if (namePart.isEmpty()) {
-            return null;
-        }
-        return new String[]{namePart, versionPart};
-    }
 }

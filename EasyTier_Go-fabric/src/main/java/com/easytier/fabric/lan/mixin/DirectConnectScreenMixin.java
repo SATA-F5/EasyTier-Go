@@ -1,6 +1,5 @@
 package com.easytier.fabric.lan.mixin;
 
-import com.easytier.fabric.lan.EasyTierService;
 import com.easytier.fabric.lan.client.AutoConnectConfig;
 import com.easytier.fabric.lan.client.EasyTierConfigScreen;
 import com.easytier.fabric.lan.platform.PlatformDetector;

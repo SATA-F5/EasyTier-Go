@@ -2,8 +2,8 @@ package com.easytier.fabric.lan;
 
 import com.easytier.fabric.lan.binary.BinaryExtractor;
 import com.easytier.fabric.lan.config.ConfigManager;
+import com.easytier.fabric.lan.config.FileSanitizer;
 import com.easytier.fabric.lan.config.TomlConfig;
-import com.easytier.fabric.lan.config.Version;
 import com.easytier.fabric.lan.platform.PlatformDetector;
 import com.easytier.fabric.lan.process.EasyTierCliRunner;
 import com.easytier.fabric.lan.process.EasyTierProcessManager;
@@ -33,7 +33,6 @@ public class EasyTierService {
     private final EasyTierProcessManager processManager;
     private volatile String currentNetworkName = "";
     private volatile String currentRelayServer = "";
-    private volatile String currentVersion = "";
     private volatile String currentConfigFile = "";
     private volatile String currentInstanceId = "";
     private volatile int peerCount = -1;
@@ -98,10 +97,6 @@ public class EasyTierService {
         return currentRelayServer;
     }
 
-    public String getCurrentVersion() {
-        return currentVersion;
-    }
-
     public String getCurrentConfigFile() {
         return currentConfigFile;
     }
@@ -112,6 +107,10 @@ public class EasyTierService {
 
     public int getPeerCount() {
         return peerCount;
+    }
+
+    public void updatePeerCount(int count) {
+        this.peerCount = count;
     }
 
     public long getProcessPid() {
@@ -133,16 +132,12 @@ public class EasyTierService {
     public void refreshPeerCountAsync() {
         executor.submit(() -> {
             try {
+                if (!processManager.isRunning()) {
+                    return;
+                }
                 String output = processManager.getCliRunner().peer();
-                if (output != null) {
-                    // 简单统计 peer 输出中的行数（排除表头）
-                    String[] lines = output.split("\\r?\\n");
-                    int count = 0;
-                    for (String line : lines) {
-                        if (line != null && line.trim().length() > 0 && !line.contains("PEER") && !line.contains("---")) {
-                            count++;
-                        }
-                    }
+                int count = EasyTierCliRunner.countPeerRows(output);
+                if (count >= 0) {
                     peerCount = count;
                 }
             } catch (Exception e) {
@@ -167,12 +162,12 @@ public class EasyTierService {
 
     /**
      * 启动 EasyTier
-     * 按"名称+版本"搜索文件，存在则读取，不存在则生成
+     * 按网络名称查找配置文件，存在则读取，不存在则生成 <名称>.toml
      */
-    public boolean start(String networkName, Version version, String relayServer,
-                         String networkSecret, String devName, boolean dhcp) {
+    public synchronized boolean start(String networkName, String relayServer,
+                                      String networkSecret, String devName, boolean dhcp) {
         try {
-            return startInternal(networkName, version, relayServer, networkSecret, devName, dhcp);
+            return startInternal(networkName, relayServer, networkSecret, devName, dhcp);
         } catch (Exception e) {
             logManager.error("启动过程发生未捕获异常: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             Throwable cause = e.getCause();
@@ -184,7 +179,7 @@ public class EasyTierService {
         }
     }
 
-    private boolean startInternal(String networkName, Version version, String relayServer,
+    private boolean startInternal(String networkName, String relayServer,
                                   String networkSecret, String devName, boolean dhcp) {
         if (!isPlatformSupported()) {
             logManager.error("当前平台不支持 EasyTier");
@@ -209,12 +204,12 @@ public class EasyTierService {
         logManager.info("开始启动流程: network=" + networkName + ", relay=" + relayServer);
 
         TomlConfig config;
-        boolean fileExists = configManager.configExists(networkName, version);
+        boolean fileExists = configManager.configExists(networkName);
 
         if (fileExists) {
-            config = configManager.loadConfig(networkName, version);
+            config = configManager.loadConfig(networkName);
             if (config == null || config.isCorrupted()) {
-                logManager.error("配置文件损坏: " + networkName + "_" + version + ".toml");
+                logManager.error("配置文件损坏: " + FileSanitizer.sanitize(networkName) + ".toml");
                 return false;
             }
             logManager.info("加载已有配置: " + config.toFileName());
@@ -232,7 +227,6 @@ public class EasyTierService {
             config.setNetworkSecret(networkSecret);
             config.setDevName(devName);
             config.setDhcp(dhcp);
-            config.setVersion(version);
             if (!configManager.saveConfig(config)) {
                 logManager.error("保存配置失败");
                 return false;
@@ -241,10 +235,10 @@ public class EasyTierService {
         }
 
         // 启动新日志文件
-        String safeName = com.easytier.fabric.lan.config.FileSanitizer.sanitize(networkName);
-        logManager.startNewLog(safeName, version.toString(), false, null);
+        String safeName = FileSanitizer.sanitize(networkName);
+        logManager.startNewLog(safeName, false, null);
         logManager.info("配置文件: " + config.toFileName());
-        logManager.info("启动配置: " + networkName + " @ " + version + " (" + config.toFileName() + ")");
+        logManager.info("启动配置: " + networkName + " (" + config.toFileName() + ")");
 
         // 启动进程
         Path configFile = configManager.getConfigsDir().resolve(config.toFileName());
@@ -254,7 +248,6 @@ public class EasyTierService {
         if (result) {
             this.currentNetworkName = networkName;
             this.currentRelayServer = relayServer;
-            this.currentVersion = version != null ? version.toString() : "";
             this.currentConfigFile = config.toFileName();
             this.currentInstanceId = config.getInstanceId() != null ? config.getInstanceId() : "";
             this.peerCount = -1;
@@ -265,11 +258,10 @@ public class EasyTierService {
     /**
      * 停止 EasyTier
      */
-    public void stop() {
+    public synchronized void stop() {
         processManager.stop();
         this.currentNetworkName = "";
         this.currentRelayServer = "";
-        this.currentVersion = "";
         this.currentConfigFile = "";
         this.currentInstanceId = "";
         this.peerCount = -1;
@@ -279,8 +271,13 @@ public class EasyTierService {
     /**
      * 清理所有残留的 easytier-core 进程
      */
-    public void cleanupAllProcesses() {
+    public synchronized void cleanupAllProcesses() {
         processManager.cleanupAllProcesses();
+        this.currentNetworkName = "";
+        this.currentRelayServer = "";
+        this.currentConfigFile = "";
+        this.currentInstanceId = "";
+        this.peerCount = -1;
         logManager.info("已清理所有 EasyTier 进程");
     }
 
@@ -288,14 +285,14 @@ public class EasyTierService {
      * 异步启动 EasyTier（不阻塞 UI 线程）
      * 返回 CompletableFuture，完成时包含启动结果
      */
-    public CompletableFuture<Boolean> startAsync(String networkName, Version version, String relayServer,
+    public CompletableFuture<Boolean> startAsync(String networkName, String relayServer,
                                                   String networkSecret, String devName, boolean dhcp) {
         if (pendingStart.get() != null && !pendingStart.get().isDone()) {
             logManager.warn("已有启动任务在执行中");
             return pendingStart.get();
         }
         CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() ->
-                start(networkName, version, relayServer, networkSecret, devName, dhcp), executor);
+                start(networkName, relayServer, networkSecret, devName, dhcp), executor);
         pendingStart.set(future);
         return future;
     }
@@ -339,7 +336,11 @@ public class EasyTierService {
      * 获取当前虚拟 IP
      */
     public String getVirtualIp() {
-        return processManager.getVirtualIp();
+        String ip = processManager.getVirtualIp();
+        if (ip == null || ip.isEmpty()) {
+            ip = EasyTierCliRunner.getGlobalVirtualIp();
+        }
+        return ip;
     }
 
     /**
@@ -364,23 +365,16 @@ public class EasyTierService {
     }
 
     /**
-     * 获取指定网络的所有版本
+     * 获取指定网络的配置
      */
-    public List<TomlConfig> listVersions(String networkName) {
-        return configManager.getVersions(networkName);
-    }
-
-    /**
-     * 获取指定网络的最新版本
-     */
-    public TomlConfig getLatestVersion(String networkName) {
-        return configManager.getLatestVersion(networkName);
+    public TomlConfig getConfig(String networkName) {
+        return configManager.loadConfig(networkName);
     }
 
     /**
      * 扫描所有配置
      */
-    public Map<String, List<TomlConfig>> scanAllConfigs() {
+    public Map<String, TomlConfig> scanAllConfigs() {
         return configManager.scanAllConfigs();
     }
 }

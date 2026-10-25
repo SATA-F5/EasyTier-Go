@@ -3,26 +3,21 @@ package com.easytier.forge.lan;
 import com.easytier.forge.lan.command.EasyTierCommand;
 import com.easytier.forge.lan.config.ConfigManager;
 import com.easytier.forge.lan.config.TomlConfig;
-import com.easytier.forge.lan.config.Version;
 import com.easytier.forge.lan.platform.PlatformDetector;
 import com.mojang.logging.LogUtils;
 import net.minecraft.server.MinecraftServer;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.event.server.ServerStartingEvent;
+import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
-import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import net.minecraftforge.fml.loading.FMLPaths;
 import org.slf4j.Logger;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 /**
  * EasyTier Forge LAN 模组主入口
@@ -35,10 +30,16 @@ public class EasyTierForgeLan {
 
     private static MinecraftServer currentServer;
 
-    public EasyTierForgeLan() {
-        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
-        modEventBus.addListener(this::commonSetup);
+    /**
+     * 模组数据目录：<游戏目录>/config/easytier_go
+     * 使用 FMLPaths.GAMEDIR，避免不同启动器工作目录不一致导致配置分裂。
+     */
+    public static Path getConfigDir() {
+        return FMLPaths.GAMEDIR.get().resolve("config").resolve("easytier_go");
+    }
 
+    public EasyTierForgeLan() {
+        FMLJavaModLoadingContext.get().getModEventBus().addListener(this::commonSetup);
         MinecraftForge.EVENT_BUS.register(this);
     }
 
@@ -47,7 +48,7 @@ public class EasyTierForgeLan {
 
         PlatformDetector.detect();
 
-        Path gameDir = Paths.get("").toAbsolutePath().resolve("config").resolve("easytier_go");
+        Path gameDir = getConfigDir();
         EasyTierService service = EasyTierService.getInstance(gameDir);
         service.getLogManager().info("EasyTier Forge LAN 初始化，平台: "
                 + PlatformDetector.getPlatform() + " / " + PlatformDetector.getArchitecture());
@@ -76,7 +77,7 @@ public class EasyTierForgeLan {
     }
 
     @SubscribeEvent
-    public void onServerStarting(ServerStartingEvent event) {
+    public void onServerStarted(ServerStartedEvent event) {
         currentServer = event.getServer();
         onServerStarted(event.getServer());
     }
@@ -102,60 +103,51 @@ public class EasyTierForgeLan {
         try {
             service = EasyTierService.getInstance();
         } catch (IllegalStateException e) {
-            Path gameDir = Paths.get("").toAbsolutePath().resolve("config").resolve("easytier_go");
+            Path gameDir = getConfigDir();
             service = EasyTierService.getInstance(gameDir);
         }
 
-        Path serverDir = service.getBaseDir().resolve("server");
+        ConfigManager cm = service.getConfigManager();
 
-        boolean autoStart = false;
-        Path serverConfig = service.getBaseDir().resolve("server.toml");
-        if (Files.exists(serverConfig)) {
-            try {
-                String content = Files.readString(serverConfig);
-                autoStart = content.contains("auto_start_on_world_load")
-                        && content.contains("true");
-            } catch (Exception e) {
-                LOGGER.warn("读取 server.toml 失败: {}", e.getMessage());
-            }
-        }
-
-        if (!autoStart) {
+        // 检查全局自动启动开关
+        if (!cm.isAutoStartOnWorldLoad()) {
             return;
         }
 
+        // 读取世界级 active.json
         String worldName = server.getWorldData().getLevelName();
-        Path worldActive = serverDir.resolve(worldName).resolve("active.json");
-        if (!Files.exists(worldActive)) {
+        ConfigManager.ActiveConfig active = cm.readWorldActive(worldName);
+        if (active == null || active.network_name == null || active.network_name.isEmpty()) {
+            return;
+        }
+        if (!active.auto_start) {
             return;
         }
 
-        try {
-            String content = Files.readString(worldActive);
-            com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(content).getAsJsonObject();
-            String networkName = json.has("network_name") ? json.get("network_name").getAsString() : null;
-            String versionStr = json.has("version") ? json.get("version").getAsString() : "v1.0";
-            boolean worldAutoStart = !json.has("auto_start") || json.get("auto_start").getAsBoolean();
-
-            if (networkName != null && worldAutoStart) {
-                Version version = Version.parse(versionStr);
-                if (version == null) version = new Version(1, 0);
-
-                ConfigManager cm = service.getConfigManager();
-                TomlConfig cfg = cm.loadConfig(networkName, version);
-                if (cfg != null && !cfg.isCorrupted()) {
-                    LOGGER.info("自动启动 EasyTier: {} @ {}", networkName, version);
-                    service.start(
-                            cfg.getNetworkName(), version,
-                            cfg.getRelayServer() != null ? cfg.getRelayServer() : "",
-                            cfg.getNetworkSecret() != null ? cfg.getNetworkSecret() : "",
-                            cfg.getDevName() != null ? cfg.getDevName() : "et_forge",
-                            cfg.isDhcp());
-                }
-            }
-        } catch (Exception e) {
-            LOGGER.error("自动启动 EasyTier 失败: {}", e.getMessage());
+        TomlConfig cfg = cm.loadConfig(active.network_name);
+        if (cfg == null || cfg.isCorrupted()) {
+            LOGGER.warn("自动启动配置不存在或已损坏: {}", active.network_name);
+            return;
         }
+
+        String startName = cfg.getNetworkName() != null && !cfg.getNetworkName().isEmpty()
+                ? cfg.getNetworkName() : active.network_name;
+        String startRelay = cfg.getRelayServer() != null ? cfg.getRelayServer() : "";
+        String startSecret = cfg.getNetworkSecret() != null ? cfg.getNetworkSecret() : "";
+        String startDev = cfg.getDevName() != null ? cfg.getDevName() : "et_forge";
+        boolean startDhcp = cfg.isDhcp();
+
+        LOGGER.info("自动启动 EasyTier: {}", startName);
+
+        // 启动流程包含进程清理与等待，放到后台线程避免阻塞服务器启动
+        final EasyTierService starterService = service;
+        Thread starter = new Thread(() -> {
+            if (!starterService.start(startName, startRelay, startSecret, startDev, startDhcp)) {
+                LOGGER.error("自动启动 EasyTier 失败: {}", startName);
+            }
+        }, "easytier-autostart");
+        starter.setDaemon(true);
+        starter.start();
     }
 
     public static MinecraftServer getCurrentServer() {

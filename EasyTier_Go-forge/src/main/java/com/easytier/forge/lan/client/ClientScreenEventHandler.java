@@ -1,5 +1,7 @@
 package com.easytier.forge.lan.client;
 
+import com.easytier.forge.lan.EasyTierForgeLan;
+import com.easytier.forge.lan.EasyTierService;
 import com.easytier.forge.lan.platform.PlatformDetector;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -17,6 +19,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 import java.nio.file.Path;
@@ -28,6 +31,43 @@ import java.util.List;
  */
 @OnlyIn(Dist.CLIENT)
 public class ClientScreenEventHandler {
+
+    private Button multiplayerStatusButton;
+    private EasyTierService multiplayerService;
+    private int statusUpdateCounter = 0;
+
+    /**
+     * 多人游戏界面右上角状态按钮：定期刷新运行状态
+     */
+    @SubscribeEvent
+    public void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
+        if (multiplayerStatusButton == null || multiplayerService == null) {
+            return;
+        }
+        if (!(Minecraft.getInstance().screen instanceof JoinMultiplayerScreen)) {
+            multiplayerStatusButton = null;
+            multiplayerService = null;
+            return;
+        }
+        statusUpdateCounter++;
+        if (statusUpdateCounter >= 20) {
+            statusUpdateCounter = 0;
+            multiplayerStatusButton.setMessage(Component.literal(buildStatusLabel(multiplayerService)));
+        }
+    }
+
+    private String buildStatusLabel(EasyTierService service) {
+        if (service == null) {
+            return "EasyTier";
+        }
+        if (service.isStartPending()) {
+            return "EasyTier: 启动中";
+        }
+        return service.isRunning() ? "EasyTier: 运行中" : "EasyTier: 已停止";
+    }
 
     @SubscribeEvent
     public void onScreenInit(ScreenEvent.Init.Post event) {
@@ -104,18 +144,24 @@ public class ClientScreenEventHandler {
     private void injectServerEditScreenCommon(Screen screen, ScreenEvent.Init.Post event) {
         int cx = screen.width / 2;
 
-        Path configDir = screen.getMinecraft().gameDirectory.toPath().resolve("config").resolve("easytier_go");
+        Path configDir = EasyTierForgeLan.getConfigDir();
         AutoConnectConfig autoConnectConfig = new AutoConnectConfig(configDir);
 
-        // 找到所有输入框，取最下面的那个（服务器地址输入框）
+        // 找到地址输入框：优先选择内容像地址的输入框，否则取最下面的输入框
+        EditBox addressLikeField = null;
         EditBox lowestField = null;
         for (var child : screen.children()) {
             if (child instanceof EditBox field) {
                 if (lowestField == null || field.getY() > lowestField.getY()) {
                     lowestField = field;
                 }
+                String text = field.getValue().trim();
+                if (addressLikeField == null && (text.contains(":") || text.contains("."))) {
+                    addressLikeField = field;
+                }
             }
         }
+        EditBox addressField = addressLikeField != null ? addressLikeField : lowestField;
 
         // 用排除法找到资源包按钮：不是完成、不是取消的全宽按钮
         AbstractWidget resourcePackButton = null;
@@ -152,8 +198,8 @@ public class ClientScreenEventHandler {
         int buttonY;
         if (resourcePackButton != null) {
             buttonY = resourcePackButton.getY() + resourcePackButton.getHeight() + 4;
-        } else if (lowestField != null) {
-            buttonY = lowestField.getY() + lowestField.getHeight() + 12;
+        } else if (addressField != null) {
+            buttonY = addressField.getY() + addressField.getHeight() + 12;
         } else {
             buttonY = screen.height / 4 + 108;
         }
@@ -169,8 +215,8 @@ public class ClientScreenEventHandler {
                 .build();
         event.addListener(easyTierButton);
 
-        EditBox finalAddressField = lowestField;
-        String currentAddr = lowestField != null ? lowestField.getValue().trim() : "";
+        EditBox finalAddressField = addressField;
+        String currentAddr = addressField != null ? addressField.getValue().trim() : "";
         boolean autoEnabled = autoConnectConfig.isEnabled(currentAddr);
         CycleButton<Boolean> autoConnectToggle = CycleButton.<Boolean>builder(val ->
                         Component.literal(val ? "开" : "关"))
@@ -245,8 +291,11 @@ public class ClientScreenEventHandler {
         int btnX = screen.width - btnW - 8;
         int btnY = 6;
 
+        Path configDir = screen.getMinecraft().gameDirectory.toPath().resolve("config").resolve("easytier_go");
+        EasyTierService service = EasyTierService.getInstance(configDir);
+
         Button easyTierButton = Button.builder(
-                        Component.literal("EasyTier"),
+                        Component.literal(buildStatusLabel(service)),
                         btn -> {
                             if (screen.getMinecraft() != null) {
                                 screen.getMinecraft().setScreen(new EasyTierConfigScreen(screen));
@@ -255,5 +304,9 @@ public class ClientScreenEventHandler {
                 .bounds(btnX, btnY, btnW, btnH)
                 .build();
         event.addListener(easyTierButton);
+
+        this.multiplayerStatusButton = easyTierButton;
+        this.multiplayerService = service;
+        this.statusUpdateCounter = 0;
     }
 }

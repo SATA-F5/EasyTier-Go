@@ -26,7 +26,6 @@ public class AutoConnectConfig {
     public static class AutoConnectEntry {
         public boolean enabled;
         public String networkName;
-        public String version;
         public String relayServer;
         public String networkSecret;
         public int virtualPort;
@@ -35,7 +34,6 @@ public class AutoConnectConfig {
         public AutoConnectEntry() {
             this.enabled = false;
             this.networkName = "";
-            this.version = "v1.0";
             this.relayServer = "";
             this.networkSecret = "";
             this.virtualPort = 25565;
@@ -57,8 +55,9 @@ public class AutoConnectConfig {
                     entries.putAll(loaded);
                 }
             }
-        } catch (IOException e) {
-            // 使用默认空配置
+        } catch (Exception e) {
+            // 文件损坏或格式错误时使用默认空配置
+            entries.clear();
         }
     }
 

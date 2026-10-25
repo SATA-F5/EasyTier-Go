@@ -82,7 +82,7 @@ public class ConfigListWidget extends EntryListWidget<ConfigListWidget.ConfigEnt
                 color = 0x55FF55;
             }
             context.drawTextWithShadow(client.textRenderer, name, x + 4, y + 4, color);
-            // 版本数提示
+            // 提示
             context.drawTextWithShadow(client.textRenderer, Text.literal("点击加载"),
                     x + entryWidth - 60, y + 4, 0x808080);
         }

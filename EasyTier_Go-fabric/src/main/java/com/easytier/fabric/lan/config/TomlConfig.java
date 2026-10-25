@@ -2,7 +2,6 @@ package com.easytier.fabric.lan.config;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 
 /**
  * EasyTier TOML 配置模型
@@ -19,7 +18,6 @@ public class TomlConfig {
     private String networkSecret = "";
     private String relayServer;
     private String devName = "et_fabric";
-    private Version version;
     private String generatedTimestamp;
     private boolean corrupted = false;
     private String sourceFileName;
@@ -111,14 +109,6 @@ public class TomlConfig {
         this.devName = devName != null && !devName.isEmpty() ? devName : "et_fabric";
     }
 
-    public Version getVersion() {
-        return version;
-    }
-
-    public void setVersion(Version version) {
-        this.version = version;
-    }
-
     public String getGeneratedTimestamp() {
         return generatedTimestamp;
     }
@@ -144,11 +134,9 @@ public class TomlConfig {
     }
 
     /**
-     * 计算磁盘文件名: <sanitize(network_name)>_<version>.toml
+     * 计算磁盘文件名: <sanitize(network_name)>.toml
      */
     public String toFileName() {
-        String safe = FileSanitizer.sanitize(networkName);
-        String ver = version != null ? version.toString() : "v1.0";
-        return safe + "_" + ver + ".toml";
+        return FileSanitizer.sanitize(networkName) + ".toml";
     }
 }

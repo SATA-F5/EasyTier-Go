@@ -11,7 +11,7 @@ import java.util.Map;
  * - [section] 下的 key = value
  * - [[array_of_tables]] 下的 key = value
  * - key = [ "a", "b" ] 数组
- * - # 注释（顶部注释中提取 version）
+ * - # 注释（顶部注释中提取生成时间）
  */
 public final class TomlParser {
 
@@ -37,21 +37,15 @@ public final class TomlParser {
             Map<String, String> flags = new LinkedHashMap<>();
             Map<String, String> peer = new LinkedHashMap<>();
             List<String> listeners = new ArrayList<>();
-            String versionFromComment = null;
             String generatedFromComment = null;
 
             for (String rawLine : lines) {
                 String line = rawLine.trim();
 
-                // 提取顶部注释中的 version
+                // 提取顶部注释中的生成时间
                 if (line.startsWith("#")) {
                     String commentContent = line.substring(1).trim();
-                    if (commentContent.startsWith("version")) {
-                        int eq = commentContent.indexOf('=');
-                        if (eq >= 0) {
-                            versionFromComment = commentContent.substring(eq + 1).trim();
-                        }
-                    } else if (commentContent.startsWith("generated")) {
+                    if (commentContent.startsWith("generated")) {
                         int eq = commentContent.indexOf('=');
                         if (eq >= 0) {
                             generatedFromComment = commentContent.substring(eq + 1).trim();
@@ -106,7 +100,9 @@ public final class TomlParser {
 
             // 填充 config
             config.setInstanceName(topLevel.getOrDefault("instance_name", ""));
-            config.setInstanceId(topLevel.getOrDefault("instance_id", TomlConfig.generateInstanceId()));
+            String instanceId = topLevel.get("instance_id");
+            config.setInstanceId(instanceId != null && !instanceId.isEmpty()
+                    ? instanceId : TomlConfig.generateInstanceId());
             config.setDhcp(Boolean.parseBoolean(topLevel.getOrDefault("dhcp", "true")));
             if (topLevel.containsKey("ipv4")) {
                 config.setManualIpv4(topLevel.get("ipv4"));
@@ -131,13 +127,6 @@ public final class TomlParser {
                 config.setRelayServer(stripProtocol(peerUri));
             }
 
-            // 版本优先从注释取，其次从文件名
-            if (versionFromComment != null) {
-                Version v = Version.parse(versionFromComment);
-                if (v != null) {
-                    config.setVersion(v);
-                }
-            }
             config.setGeneratedTimestamp(generatedFromComment);
 
             // 校验关键字段

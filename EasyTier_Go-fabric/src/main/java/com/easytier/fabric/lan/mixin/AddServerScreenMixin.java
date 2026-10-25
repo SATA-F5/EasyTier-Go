@@ -46,12 +46,20 @@ public abstract class AddServerScreenMixin extends Screen {
         Path configDir = this.client.runDirectory.toPath().resolve("config").resolve("easytier-go");
         autoConnectConfig = new AutoConnectConfig(configDir);
 
-        // 找到地址输入框
+        // 找到地址输入框（优先选择内容像地址的输入框，否则取最后一个输入框）
+        TextFieldWidget lastField = null;
         for (var child : this.children()) {
             if (child instanceof TextFieldWidget field) {
-                addressField = field;
-                break;
+                lastField = field;
+                String text = field.getText().trim();
+                if (text.contains(":") || text.contains(".")) {
+                    addressField = field;
+                    break;
+                }
             }
+        }
+        if (addressField == null) {
+            addressField = lastField;
         }
 
         // 查找"服务器资源包"按钮作为锚点

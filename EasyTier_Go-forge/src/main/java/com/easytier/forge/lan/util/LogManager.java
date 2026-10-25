@@ -23,8 +23,8 @@ public class LogManager {
     }
 
     private final Path logsDir;
-    private Path currentLogFile;
-    private Consumer<String> uiCallback;
+    private volatile Path currentLogFile;
+    private volatile Consumer<String> uiCallback;
     private final List<String> buffer = new ArrayList<>();
     private static final int MAX_BUFFER = 500;
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
@@ -42,18 +42,17 @@ public class LogManager {
     /**
      * 开始一个新的日志文件
      * @param name 网络名称（sanitize 后）
-     * @param version 版本字符串
      * @param isServer 是否服务端
      * @param worldName 服务端世界名（仅服务端）
      */
-    public void startNewLog(String name, String version, boolean isServer, String worldName) {
+    public void startNewLog(String name, boolean isServer, String worldName) {
         String date = DATE_FMT.format(LocalDateTime.now());
         String fileName;
         if (isServer) {
             String world = worldName != null ? worldName : "server";
-            fileName = "server-" + world + "-" + name + "_" + version + "-" + date + ".log";
+            fileName = "server-" + world + "-" + name + "-" + date + ".log";
         } else {
-            fileName = "client-" + name + "_" + version + "-" + date + ".log";
+            fileName = "client-" + name + "-" + date + ".log";
         }
         this.currentLogFile = logsDir.resolve(fileName);
         try {

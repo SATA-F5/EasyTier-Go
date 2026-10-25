@@ -7,7 +7,7 @@
 - 游戏内一键配置 EasyTier 网络，无需手动操作命令行
 - 首次启动自动从 GitHub 下载 EasyTier CLI（13个镜像加速），免安装
 - 在"对局域网开放"界面直接注入 EasyTier 配置按钮
-- 多配置管理：按网络名称 + 版本号（v1.0, v1.1...）管理多套配置
+- 多配置管理：每个网络对应一个配置文件（如 `mc.toml`），不再使用版本号
 - 端口转发支持：策略 A（转发到虚拟端口）和策略 B（直连实际端口）
 - 实时日志显示，同时写入日志文件
 - 完整的 `/easytier` 服务端命令树
@@ -39,7 +39,7 @@ gradlew.bat build
 ./gradlew build
 ```
 
-构建产物位于 `build/libs/easytier-go-1.0.0.jar`
+构建产物位于 `build/libs/easytier-go-1.0.3.jar`
 
 ### 使用系统 Gradle
 
@@ -51,9 +51,9 @@ gradle build
 
 ## 安装方法
 
-1. 将构建好的 `easytier-go-1.0.0.jar` 放入 Minecraft 的 `mods` 文件夹
+1. 将构建好的 `easytier-go-1.0.3.jar` 放入 Minecraft 的 `mods` 文件夹
 2. 确保已安装 Fabric API
-3. 将 EasyTier 二进制放入 `src/main/resources/easytier/` 对应平台目录后重新构建，或手动放置到 `config/easytier-fabric/bin/`
+3. 将 EasyTier 二进制放入 `src/main/resources/easytier/` 对应平台目录后重新构建，或手动放置到 `config/easytier-go/bin/`
 4. 启动游戏
 
 ### 二进制放置说明
@@ -72,7 +72,7 @@ resources/easytier/
 
 下载地址：https://github.com/EasyTier/EasyTier/releases
 
-模组启动时自动将当前平台二进制解压到 `config/easytier-fabric/bin/`，Linux/macOS 自动设置可执行权限。
+模组启动时自动将当前平台二进制解压到 `config/easytier-go/bin/`，Linux/macOS 自动设置可执行权限。
 
 ## 使用方法
 
@@ -84,12 +84,13 @@ resources/easytier/
 4. 填写配置：
    - **配置项**：选择已有配置或新建
    - **网络名称**（必填）：虚拟局域网名称，所有联机玩家必须相同
-   - **版本**：选择配置版本，可保存为新版本
    - **中继服务器**（必填）：如 `public.easytier.cn:11010`
    - **网络密码**（选填）：虚拟局域网密码
    - **虚拟网卡名**（高级）：默认 `et_fabric`
 5. 点击"启动"
 6. 等待虚拟 IP 分配，将连接地址告诉朋友
+   - 虚拟 IP 以 `easytier-cli peer` 输出中 `cost=Local` 的行为准，自动转换为标准 IPv4（不带 `/24` 掩码）
+   - 该 IP 仅保存在内存中的全局变量里，不会写入 TOML 或其他数据文件
 7. 朋友在"直接连接"中输入该地址即可加入
 
 ### 端口转发策略
@@ -100,23 +101,55 @@ resources/easytier/
 ### 服务端命令
 
 ```
-/easytier start <网络名称> <中继服务器> [密码] [版本]   # 启动 EasyTier
-/easytier stop                                          # 停止 EasyTier
-/easytier status                                        # 查看运行状态
-/easytier peer                                          # 查看节点列表
-/easytier node                                          # 查看本节点信息
-/easytier route                                         # 查看路由表
+/easytier start <网络名称> <中继服务器> [密码]      # 启动 EasyTier
+/easytier stop                                       # 停止 EasyTier
+/easytier status                                     # 查看运行状态
+/easytier peer                                       # 查看节点列表
+/easytier node                                       # 查看本节点信息
+/easytier route                                      # 查看路由表
 /easytier portforward add <tcp|udp> <端口> <虚拟IP> <MC端口>
 /easytier portforward remove <tcp|udp> <端口>
 /easytier portforward list
-/easytier config list                                   # 列出所有配置
-/easytier config use <网络名称> [版本]                  # 设置活动配置
-/easytier config save [版本]                            # 保存当前配置
-/easytier config delete <网络名称> [版本]               # 删除配置
-/easytier reload                                        # 从 active.json 重启
+/easytier config list                                # 列出所有配置
+/easytier config use <网络名称>                      # 设置活动配置
+/easytier config save                                # 保存当前配置
+/easytier config delete <网络名称>                   # 删除配置
+/easytier autostart on [网络名称]                    # 开启服务器世界自启动
+/easytier autostart off                              # 关闭服务器世界自启动
+/easytier autostart status                           # 查看自启动状态
+/easytier reload                                     # 从 active.json 重启
 ```
 
 兼容旧形式：`/easytier <网络名称> <中继服务器> [密码]`
+
+### 服务端自动启动
+
+在服务器控制台执行一次：
+
+```text
+/easytier autostart on mc
+```
+
+即可开启当前世界的 EasyTier 自启动，等价于自动写入：
+
+```text
+config/easytier-go/server.toml
+config/easytier-go/server/<世界名>/active.json
+```
+
+之后服务器每次启动并加载该世界时，会自动使用 `configs/mc.toml` 启动 EasyTier。
+
+关闭自启动：
+
+```text
+/easytier autostart off
+```
+
+查看当前状态：
+
+```text
+/easytier autostart status
+```
 
 ### 公共中继服务器
 
@@ -125,11 +158,11 @@ https://info.qtet.cn/uptime/easytier
 
 ## 配置文件
 
-配置存储在 `config/easytier-fabric/` 目录：
+配置存储在 `config/easytier-go/` 目录：
 
 ```
-config/easytier-fabric/
-├── configs/           # TOML 配置文件 (<名称>_<版本>.toml)
+config/easytier-go/
+├── configs/           # TOML 配置文件（<名称>.toml，如 mc.toml）
 ├── bin/               # 解压后的 EasyTier 二进制
 ├── logs/              # 日志文件
 └── active.json        # 活动配置记录
@@ -138,9 +171,8 @@ config/easytier-fabric/
 TOML 配置示例：
 
 ```toml
-# easytier-fabric config
+# easytier-go config
 # network_name = my-mc-network
-# version      = v1.1
 # generated    = 2026-10-17T10:05:00Z
 instance_name = "my-mc-network"
 instance_id = "a1b2c3d4e5f6"
@@ -187,7 +219,6 @@ easytier-mc/
     │   │   ├── TomlConfig.java           # TOML 配置模型
     │   │   ├── TomlGenerator.java        # TOML 生成器
     │   │   ├── TomlParser.java           # TOML 解析器
-    │   │   ├── Version.java              # 版本号比较
     │   │   └── FileSanitizer.java        # 文件名安全处理
     │   ├── binary/
     │   │   └── BinaryExtractor.java      # 二进制解压与权限设置
@@ -204,8 +235,8 @@ easytier-mc/
     │       └── LogManager.java           # 日志管理
     └── resources/
         ├── fabric.mod.json
-        ├── easytier-fabric-lan.mixins.json
-        ├── assets/easytier-fabric-lan/lang/
+        ├── easytier-go.mixins.json
+        ├── assets/easytier-go/lang/
         │   ├── zh_cn.json
         │   └── en_us.json
         └── easytier/                     # 各平台二进制（需自行放入）
@@ -213,8 +244,8 @@ easytier-mc/
 
 ## 注意事项
 
-1. EasyTier 创建 TUN 虚拟网卡需要管理员/root 权限
-2. Linux 上需确保 `/dev/net/tun` 可用，必要时执行 `sudo setcap cap_net_admin+ep easytier-core`
+1. 模组默认使用 `--no-tun` + `smoltcp` 用户态协议栈，不需要管理员/root 权限，也不依赖 `/dev/net/tun`
+2. 只有在你自行改用 TUN 模式时，才需要 `/dev/net/tun` 和相应权限（如 `sudo setcap cap_net_admin+ep easytier-core`）
 3. macOS 上首次运行可能被 Gatekeeper 拦截，执行 `xattr -d com.apple.quarantine easytier-core` 或在系统设置中放行
 4. 所有联机玩家必须使用相同的网络名称和密码
 5. 中继服务器仅用于节点发现和中继，数据传输优先 P2P 直连

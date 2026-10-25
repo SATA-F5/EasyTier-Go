@@ -1,6 +1,5 @@
 package com.easytier.fabric.lan.mixin;
 
-import com.easytier.fabric.lan.EasyTierService;
 import com.easytier.fabric.lan.client.EasyTierConfigScreen;
 import com.easytier.fabric.lan.platform.PlatformDetector;
 import net.minecraft.client.gui.screen.OpenToLanScreen;
@@ -35,12 +34,13 @@ public abstract class OpenToLanScreenMixin extends Screen {
         int buttonY = this.height - 28;
 
         // 原生布局：创建局域网世界 [centerX-155, w150]，取消 [centerX+5, w150]
-        // 重新排布为三按钮：创建局域网世界(140) | EasyTier(60) | 取消(140)，总宽350，居中
-        int btnW = 140;
-        int midW = 60;
+        // 重新排布为三按钮：创建局域网世界 | EasyTier | 取消，窄屏时自动收缩
         int gap = 5;
-        int totalW = btnW * 2 + midW + gap * 2; // 350
-        int startX = centerX - totalW / 2; // centerX - 175
+        int totalW = Math.min(350, Math.max(240, this.width - 20));
+        int midW = Math.min(60, Math.max(40, totalW / 5));
+        int btnW = Math.max(40, (totalW - midW - gap * 2) / 2);
+        totalW = btnW * 2 + midW + gap * 2;
+        int startX = centerX - totalW / 2;
 
         int createX = startX;
         int easyTierX = startX + btnW + gap;

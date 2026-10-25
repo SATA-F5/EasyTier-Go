@@ -1,6 +1,7 @@
 package com.easytier.forge.lan.client;
 
 import com.easytier.forge.lan.EasyTierService;
+import com.easytier.forge.lan.process.EasyTierCliRunner;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.StringWidget;
@@ -10,6 +11,7 @@ import net.minecraft.network.chat.Component;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 public class EasyTierStatusScreen extends Screen {
 
@@ -19,13 +21,14 @@ public class EasyTierStatusScreen extends Screen {
 
     private StringWidget statusWidget;
     private StringWidget networkWidget;
-    private StringWidget versionWidget;
+    private StringWidget configFileWidget;
     private StringWidget ipWidget;
     private StringWidget relayWidget;
     private StringWidget pidWidget;
     private StringWidget peerCountWidget;
 
     private final List<String> peerLines = new ArrayList<>();
+    private volatile boolean peerLoading = false;
     private int tableStartY = 0;
     private double scrollOffset = 0;
     private int contentHeight = 0;
@@ -63,7 +66,7 @@ public class EasyTierStatusScreen extends Screen {
         y += ROW_H;
 
         addBasicRow("虚拟 IP:", MARGIN, y, MARGIN + labelW, valueW, w -> ipWidget = w);
-        addBasicRow("版本:", MARGIN + colW, y, MARGIN + colW + labelW, valueW, w -> versionWidget = w);
+        addBasicRow("配置文件:", MARGIN + colW, y, MARGIN + colW + labelW, valueW, w -> configFileWidget = w);
         y += ROW_H;
 
         addBasicRow("中继服务器:", MARGIN, y, MARGIN + labelW, valueW, w -> relayWidget = w);
@@ -114,7 +117,7 @@ public class EasyTierStatusScreen extends Screen {
         String statusText = pending ? "启动中..." : (running ? "运行中" : "已停止");
         setText(statusWidget, statusText);
         setText(networkWidget, safeStr(service.getCurrentNetworkName()));
-        setText(versionWidget, safeStr(service.getCurrentVersion()));
+        setText(configFileWidget, safeStr(service.getCurrentConfigFile()));
         setText(ipWidget, safeStr(service.getVirtualIp()));
         setText(relayWidget, safeStr(service.getCurrentRelayServer()));
 
@@ -124,68 +127,182 @@ public class EasyTierStatusScreen extends Screen {
         int peerCount = service.getPeerCount();
         setText(peerCountWidget, peerCount >= 0 ? String.valueOf(peerCount) : "--");
 
-        refreshPeerList();
-
-        if (running) {
-            service.refreshPeerCountAsync();
-        }
+        refreshPeerListAsync();
     }
 
-    private void refreshPeerList() {
-        peerLines.clear();
+    /**
+     * 后台获取节点列表，避免 CLI 调用阻塞渲染线程
+     */
+    private void refreshPeerListAsync() {
+        if (peerLoading) {
+            return;
+        }
         if (!service.isRunning()) {
+            peerLoading = false;
+            peerLines.clear();
             peerLines.add("EasyTier 未运行，无节点数据");
             return;
         }
-        String output = service.getCliRunner().peer();
+
+        peerLoading = true;
+        if (peerLines.isEmpty()) {
+            peerLines.add("正在获取节点列表...");
+        }
+        CompletableFuture.supplyAsync(() -> service.getCliRunner().peer())
+                .thenAccept(output -> {
+                    int count = EasyTierCliRunner.countPeerRows(output);
+                    List<String> newLines = parsePeerOutput(output);
+                    runOnClientThread(() -> {
+                        peerLines.clear();
+                        peerLines.addAll(newLines);
+                        if (count >= 0) {
+                            service.updatePeerCount(count);
+                            setText(peerCountWidget, String.valueOf(count));
+                        }
+                        peerLoading = false;
+                    });
+                })
+                .exceptionally(ex -> {
+                    runOnClientThread(() -> {
+                        peerLines.clear();
+                        peerLines.add("获取节点列表失败: " + ex.getMessage());
+                        peerLoading = false;
+                    });
+                    return null;
+                });
+    }
+
+    private void runOnClientThread(Runnable action) {
+        if (this.minecraft != null) {
+            this.minecraft.execute(action);
+        } else {
+            action.run();
+        }
+    }
+
+    /**
+     * 解析 peer 表格输出。表头列顺序不固定时也能正确取值。
+     */
+    private List<String> parsePeerOutput(String output) {
+        List<String> result = new ArrayList<>();
         if (output == null || output.isEmpty()) {
-            peerLines.add("无法获取节点列表");
-            return;
+            result.add("无法获取节点列表");
+            return result;
         }
         if (output.startsWith("错误") || output.startsWith("Error")) {
-            peerLines.add("获取节点列表失败: " + output);
-            return;
+            result.add("获取节点列表失败: " + output);
+            return result;
         }
-        String[] rawLines = output.split("\n");
+
+        List<String> headers = null;
         List<String[]> rows = new ArrayList<>();
-        for (String line : rawLines) {
-            if (line.trim().startsWith("|")) {
-                String[] parts = line.split("\\|", -1);
-                List<String> cells = new ArrayList<>();
-                for (int i = 1; i < parts.length - 1; i++) {
-                    cells.add(parts[i].trim());
-                }
-                if (cells.isEmpty()) continue;
-                boolean isSep = cells.stream().allMatch(c -> c.matches("^-+$") || c.isEmpty());
-                if (isSep) continue;
-                boolean isHeader = cells.stream().anyMatch(c ->
-                        c.equalsIgnoreCase("ipv4") || c.equalsIgnoreCase("hostname"));
-                if (isHeader) continue;
-                rows.add(cells.toArray(new String[0]));
+        for (String rawLine : output.split("\\R")) {
+            String line = rawLine.replaceAll("\u001B\\[[;\\d]*m", "")
+                    .replace('│', '|').replace('┃', '|').trim();
+            List<String> cells = splitPeerRow(line);
+            if (cells.isEmpty()) {
+                continue;
             }
+            boolean isSep = cells.stream().allMatch(c -> c.matches("^[-=:]+$") || c.isEmpty());
+            if (isSep) {
+                continue;
+            }
+            boolean isHeader = cells.stream().anyMatch(c ->
+                    c.equalsIgnoreCase("ipv4") || c.equalsIgnoreCase("hostname"));
+            if (isHeader) {
+                headers = cells;
+                continue;
+            }
+            if (headers == null) {
+                continue;
+            }
+            rows.add(cells.toArray(new String[0]));
         }
+
         if (rows.isEmpty()) {
-            peerLines.add("暂无连接节点");
-            return;
+            result.add("暂无连接节点");
+            return result;
         }
+
+        int ipv4Idx = columnIndex(headers, "ipv4", 0);
+        int hostnameIdx = columnIndex(headers, "hostname", 1);
+        int costIdx = columnIndex(headers, "cost", 2);
+        int latIdx = columnIndex(headers, "lat", 3);
+        int lossIdx = columnIndex(headers, "loss", 4);
+        int rxIdx = columnIndex(headers, "rx", 5);
+        int txIdx = columnIndex(headers, "tx", 6);
+        int tunnelIdx = columnIndex(headers, "tunnel", 7);
+        int natIdx = columnIndex(headers, "nat", 8);
+        int versionIdx = columnIndex(headers, "version", 9);
+
         for (int idx = 0; idx < rows.size(); idx++) {
             String[] r = rows.get(idx);
-            String ipv4 = getCell(r, 0);
-            String hostname = getCell(r, 1);
-            String cost = getCell(r, 2);
-            String lat = getCell(r, 3);
-            String loss = getCell(r, 4);
-            String rx = getCell(r, 5);
-            String tx = getCell(r, 6);
-            String tunnel = getCell(r, 7);
-            String nat = getCell(r, 8);
-            String version = getCell(r, 9);
-            peerLines.add("[" + (idx + 1) + "] " + hostname + "  (" + cost + ")");
-            peerLines.add("    ip: " + ipv4 + "  |  ver: " + version);
-            peerLines.add("    lat: " + lat + " ms  |  loss: " + loss + "  |  tun: " + tunnel);
-            peerLines.add("    rx: " + rx + "  |  tx: " + tx + "  |  NAT: " + nat);
-            peerLines.add("");
+            String ipv4 = getCell(r, ipv4Idx);
+            String hostname = getCell(r, hostnameIdx);
+            String cost = getCell(r, costIdx);
+            String lat = getCell(r, latIdx);
+            String loss = getCell(r, lossIdx);
+            String rx = getCell(r, rxIdx);
+            String tx = getCell(r, txIdx);
+            String tunnel = getCell(r, tunnelIdx);
+            String nat = getCell(r, natIdx);
+            String version = getCell(r, versionIdx);
+
+            result.add("[" + (idx + 1) + "] " + hostname + "  (" + cost + ")");
+            result.add("    ip: " + ipv4 + "  |  ver: " + version);
+            result.add("    lat: " + lat + " ms  |  loss: " + loss + "  |  tun: " + tunnel);
+            result.add("    rx: " + rx + "  |  tx: " + tx + "  |  NAT: " + nat);
+            result.add("");
         }
+        return result;
+    }
+
+    private List<String> splitPeerRow(String line) {
+        List<String> cells = new ArrayList<>();
+        if (line == null || line.isEmpty()) {
+            return cells;
+        }
+        if (line.indexOf('|') >= 0) {
+            String[] parts = line.split("\\|", -1);
+            int start = 0;
+            int end = parts.length;
+            while (start < end && parts[start].trim().isEmpty()) {
+                start++;
+            }
+            while (end > start && parts[end - 1].trim().isEmpty()) {
+                end--;
+            }
+            for (int i = start; i < end; i++) {
+                cells.add(parts[i].trim());
+            }
+        } else {
+            if (line.matches("^[+\\-=─━┌┐└┘├┤┬┴┼\\s]+$")) {
+                return cells;
+            }
+            for (String part : line.split("\\s+")) {
+                if (!part.isEmpty()) {
+                    cells.add(part);
+                }
+            }
+        }
+        return cells;
+    }
+
+    private int columnIndex(List<String> headers, String name, int fallback) {
+        if (headers == null) {
+            return fallback;
+        }
+        for (int i = 0; i < headers.size(); i++) {
+            if (headers.get(i).equalsIgnoreCase(name)) {
+                return i;
+            }
+        }
+        for (int i = 0; i < headers.size(); i++) {
+            if (headers.get(i).toLowerCase().startsWith(name)) {
+                return i;
+            }
+        }
+        return fallback;
     }
 
     private String getCell(String[] row, int index) {

@@ -5,6 +5,7 @@
   "mixins": [],
   "client": [
     "GameMenuScreenMixin",
+    "OpenToLanScreenMixin",
     "AddServerScreenMixin",
     "DirectConnectScreenMixin"
   ],

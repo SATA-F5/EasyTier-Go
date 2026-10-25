@@ -2,7 +2,6 @@ package com.easytier.forge.lan;
 
 import com.easytier.forge.lan.client.ClientScreenEventHandler;
 import com.easytier.forge.lan.platform.PlatformDetector;
-import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -21,7 +20,7 @@ public class EasyTierForgeLanClient {
     public static void onClientSetup(FMLClientSetupEvent event) {
         PlatformDetector.detect();
 
-        Path gameDir = Minecraft.getInstance().gameDirectory.toPath().resolve("config").resolve("easytier_go");
+        Path gameDir = EasyTierForgeLan.getConfigDir();
         EasyTierService service = EasyTierService.getInstance(gameDir);
         service.getLogManager().info("客户端初始化完成");
 

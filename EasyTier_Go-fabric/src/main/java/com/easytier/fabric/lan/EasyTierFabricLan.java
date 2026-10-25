@@ -3,7 +3,6 @@ package com.easytier.fabric.lan;
 import com.easytier.fabric.lan.command.EasyTierCommand;
 import com.easytier.fabric.lan.config.ConfigManager;
 import com.easytier.fabric.lan.config.TomlConfig;
-import com.easytier.fabric.lan.config.Version;
 import com.easytier.fabric.lan.platform.PlatformDetector;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -12,7 +11,6 @@ import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -70,57 +68,39 @@ public class EasyTierFabricLan implements ModInitializer {
         }
 
         EasyTierService service = EasyTierService.getInstance();
-        Path serverDir = service.getBaseDir().resolve("server");
+        ConfigManager cm = service.getConfigManager();
 
         // 检查全局自动启动开关
-        boolean autoStart = false;
-        Path serverConfig = service.getBaseDir().resolve("server.toml");
-        if (Files.exists(serverConfig)) {
-            try {
-                String content = Files.readString(serverConfig);
-                autoStart = content.contains("auto_start_on_world_load")
-                        && content.contains("true");
-            } catch (Exception e) {
-                LOGGER.warn("读取 server.toml 失败: {}", e.getMessage());
-            }
-        }
-
-        if (!autoStart) {
+        if (!cm.isAutoStartOnWorldLoad()) {
             return;
         }
 
         // 读取世界级 active.json
         String worldName = server.getSaveProperties().getLevelName();
-        Path worldActive = serverDir.resolve(worldName).resolve("active.json");
-        if (!Files.exists(worldActive)) {
+        ConfigManager.ActiveConfig active = cm.readWorldActive(worldName);
+        if (active == null || active.network_name == null || active.network_name.isEmpty()) {
+            return;
+        }
+        if (!active.auto_start) {
             return;
         }
 
-        try {
-            String content = Files.readString(worldActive);
-            com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(content).getAsJsonObject();
-            String networkName = json.has("network_name") ? json.get("network_name").getAsString() : null;
-            String versionStr = json.has("version") ? json.get("version").getAsString() : "v1.0";
-            boolean worldAutoStart = !json.has("auto_start") || json.get("auto_start").getAsBoolean();
-
-            if (networkName != null && worldAutoStart) {
-                Version version = Version.parse(versionStr);
-                if (version == null) version = new Version(1, 0);
-
-                ConfigManager cm = service.getConfigManager();
-                TomlConfig cfg = cm.loadConfig(networkName, version);
-                if (cfg != null && !cfg.isCorrupted()) {
-                    LOGGER.info("自动启动 EasyTier: {} @ {}", networkName, version);
-                    service.start(
-                            cfg.getNetworkName(), version,
-                            cfg.getRelayServer() != null ? cfg.getRelayServer() : "",
-                            cfg.getNetworkSecret() != null ? cfg.getNetworkSecret() : "",
-                            cfg.getDevName() != null ? cfg.getDevName() : "et_fabric",
-                            cfg.isDhcp());
-                }
+        TomlConfig cfg = cm.loadConfig(active.network_name);
+        if (cfg != null && !cfg.isCorrupted()) {
+            String startName = cfg.getNetworkName() != null && !cfg.getNetworkName().isEmpty()
+                    ? cfg.getNetworkName() : active.network_name;
+            LOGGER.info("自动启动 EasyTier: {}", startName);
+            boolean started = service.start(
+                    startName,
+                    cfg.getRelayServer() != null ? cfg.getRelayServer() : "",
+                    cfg.getNetworkSecret() != null ? cfg.getNetworkSecret() : "",
+                    cfg.getDevName() != null ? cfg.getDevName() : "et_fabric",
+                    cfg.isDhcp());
+            if (!started) {
+                LOGGER.error("自动启动 EasyTier 失败: {}", startName);
             }
-        } catch (Exception e) {
-            LOGGER.error("自动启动 EasyTier 失败: {}", e.getMessage());
+        } else {
+            LOGGER.warn("自动启动配置不存在或已损坏: {}", active.network_name);
         }
     }
 

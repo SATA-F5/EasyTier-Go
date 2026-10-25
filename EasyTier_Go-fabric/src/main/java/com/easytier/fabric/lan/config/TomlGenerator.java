@@ -19,11 +19,9 @@ public final class TomlGenerator {
     public static String generate(TomlConfig config) {
         StringBuilder sb = new StringBuilder();
 
-        // 顶部注释（版本信息）
-        sb.append("# easytier-fabric config").append(System.lineSeparator());
+        // 顶部注释（网络信息）
+        sb.append("# easytier-go config").append(System.lineSeparator());
         sb.append("# network_name = ").append(nullSafe(config.getNetworkName())).append(System.lineSeparator());
-        sb.append("# version      = ").append(config.getVersion() != null ? config.getVersion().toString() : "v1.0")
-                .append(System.lineSeparator());
         sb.append("# generated    = ").append(DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
                 .append(System.lineSeparator());
 
@@ -72,7 +70,7 @@ public final class TomlGenerator {
         // peer
         sb.append(System.lineSeparator());
         sb.append("[[peer]]").append(System.lineSeparator());
-        sb.append("uri = \"").append(normalizeRelayUri(config.getRelayServer())).append("\"")
+        sb.append("uri = \"").append(escape(normalizeRelayUri(config.getRelayServer()))).append("\"")
                 .append(System.lineSeparator());
 
         // flags：不创建 TUN 设备，使用 smoltcp 用户态协议栈

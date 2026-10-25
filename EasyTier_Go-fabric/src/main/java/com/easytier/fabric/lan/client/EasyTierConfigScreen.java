@@ -3,7 +3,6 @@ package com.easytier.fabric.lan.client;
 import com.easytier.fabric.lan.EasyTierService;
 import com.easytier.fabric.lan.config.FileSanitizer;
 import com.easytier.fabric.lan.config.TomlConfig;
-import com.easytier.fabric.lan.config.Version;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CyclingButtonWidget;
@@ -33,7 +32,7 @@ public class EasyTierConfigScreen extends Screen {
     private static final int MAX_LOG_LINES = 1000;
     private int logVScroll = 0;
     private int logHScroll = 0;
-    private int logMaxLineWidth = 0;
+    private volatile int logMaxLineWidth = 0;
 
     // 右栏
     private PlaceholderTextFieldWidget networkNameField;
@@ -75,6 +74,9 @@ public class EasyTierConfigScreen extends Screen {
     private static final int SCROLLBAR_W = 4;
 
     private int autoRefreshCounter = 0;
+    private boolean refreshing = false;
+    private volatile boolean portForwardEnabled = true;
+    private volatile int autoApplyToken = 0;
     private int leftPanelW;
     private int rightPanelX;
     private int rightPanelW;
@@ -212,6 +214,7 @@ public class EasyTierConfigScreen extends Screen {
         portForwardToggle = addCyclingDyn(rx, ry, toggleW, fFieldH,
                 List.of(true, false), true, "端口转发",
                 (btn, val) -> onPortForwardToggle(val));
+        portForwardEnabled = true;
         autoRefreshToggle = addCyclingDyn(rx + toggleW + fGap, ry, toggleW, fFieldH,
                 List.of(false, true), false, "自动刷新",
                 (btn, val) -> {});
@@ -246,8 +249,8 @@ public class EasyTierConfigScreen extends Screen {
         addButtonDyn(bx, btnY1, btnW4, BTN_ROW_H, "中继服务器列表", btn -> onOpenRelayList());
 
         applyPortForwardBtn = addButtonDyn(MARGIN, btnY2, btnW5, BTN_ROW_H, "端口转发", btn -> onApplyPortForward());
-        addButtonDyn(MARGIN + (btnW5 + fGap), btnY2, btnW5, BTN_ROW_H, "保存此新版", btn -> onSaveNewVersion());
-        addButtonDyn(MARGIN + (btnW5 + fGap) * 2, btnY2, btnW5, BTN_ROW_H, "删除此版本", btn -> onDeleteVersion());
+        addButtonDyn(MARGIN + (btnW5 + fGap), btnY2, btnW5, BTN_ROW_H, "保存配置", btn -> onSaveConfig());
+        addButtonDyn(MARGIN + (btnW5 + fGap) * 2, btnY2, btnW5, BTN_ROW_H, "删除配置", btn -> onDeleteConfig());
         addButtonDyn(MARGIN + (btnW5 + fGap) * 3, btnY2, btnW5, BTN_ROW_H, "清理进程", btn -> {
             service.cleanupAllProcesses();
             appendLog("[INFO] 已执行清理所有 EasyTier 进程");
@@ -255,16 +258,7 @@ public class EasyTierConfigScreen extends Screen {
         addButtonDyn(MARGIN + (btnW5 + fGap) * 4, btnY2, btnW5, BTN_ROW_H, "关闭", btn -> onClose());
 
         // 日志回调
-        service.getLogManager().setUiCallback(line -> {
-            synchronized (logLines) {
-                logLines.add(line);
-                int w = this.textRenderer.getWidth(line);
-                if (w > logMaxLineWidth) logMaxLineWidth = w;
-                while (logLines.size() > MAX_LOG_LINES) {
-                    logLines.remove(0);
-                }
-            }
-        });
+        service.getLogManager().setUiCallback(line -> appendLog(line));
 
         // 平台不支持
         if (!service.isPlatformSupported()) {
@@ -298,7 +292,7 @@ public class EasyTierConfigScreen extends Screen {
     private void onConfigSelected(String name) {
         if (networkNameField == null || relayServerField == null) return;
         selectedNetwork = name;
-        TomlConfig latest = service.getLatestVersion(name);
+        TomlConfig latest = service.getConfig(name);
         if (latest != null) {
             networkNameField.setText(latest.getNetworkName() != null ? latest.getNetworkName() : name);
             relayServerField.setText(latest.getRelayServer() != null ? latest.getRelayServer() : "");
@@ -359,6 +353,9 @@ public class EasyTierConfigScreen extends Screen {
                     if (confirmed) {
                         appendLog("[INFO] 用户已同意下载 EasyTier CLI");
                         doStart(name, relay);
+                        if (this.client != null) {
+                            this.client.setScreen(this);
+                        }
                     } else {
                         appendLog("[INFO] 用户取消下载");
                         this.client.setScreen(this);
@@ -367,7 +364,7 @@ public class EasyTierConfigScreen extends Screen {
                 Text.literal("需要下载 EasyTier CLI"),
                 Text.literal("首次使用需要从 GitHub 下载 EasyTier 核心程序（约 10-20MB）。\n"
                         + "下载源：GitHub Releases（通过 13 个镜像加速，最后回退原链接）。\n"
-                        + "下载后将进行 SHA256 完整性校验。\n\n"
+                        + "下载后将计算 SHA256 并记录到日志。\n\n"
                         + "是否继续？"),
                 Text.literal("确认下载"),
                 Text.literal("取消")
@@ -376,29 +373,31 @@ public class EasyTierConfigScreen extends Screen {
     }
 
     private void doStart(String name, String relay) {
-        Version version = new Version(1, 0);
         String secret = networkSecretField.getText().trim();
         String devName = devNameField.getText().trim();
+        final String vPortText = virtualPortField != null ? virtualPortField.getText().trim() : "";
+        final boolean portForwardRequested = portForwardToggle != null && portForwardToggle.getValue();
 
         appendLog("[INFO] 正在启动 EasyTier（异步）...");
         startButton.active = false;
         startButton.setMessage(Text.literal("启动中..."));
 
-        service.startAsync(name, version, relay, secret, devName, true)
-                .thenAcceptAsync(ok -> {
+        service.startAsync(name, relay, secret, devName, true)
+                .thenAccept(ok -> runOnClientThread(() -> {
                     if (ok != null && ok) {
                         appendLog("[INFO] EasyTier 启动成功，等待虚拟IP分配...");
                         clearError();
                         // 启动成功后自动应用端口转发（如果开关开启）
-                        if (portForwardToggle != null && portForwardToggle.getValue()) {
+                        if (portForwardRequested) {
                             appendLog("[INFO] 端口转发已启用，将在虚拟IP分配后自动配置...");
-                            autoApplyPortForward();
+                            int token = ++autoApplyToken;
+                            autoApplyPortForward(vPortText, token);
                         }
                     } else {
                         showError("EasyTier 启动失败，请查看日志详情");
                     }
                     updateButtonStates();
-                }, Runnable::run)
+                }))
                 .exceptionally(ex -> {
                     StringBuilder err = new StringBuilder("启动异常: " + ex.getMessage());
                     Throwable cause = ex.getCause();
@@ -406,10 +405,20 @@ public class EasyTierConfigScreen extends Screen {
                         err.append(" | 原因: ").append(cause.getClass().getSimpleName()).append(": ").append(cause.getMessage());
                         cause = cause.getCause();
                     }
-                    showError(err.toString());
-                    updateButtonStates();
+                    runOnClientThread(() -> {
+                        showError(err.toString());
+                        updateButtonStates();
+                    });
                     return null;
                 });
+    }
+
+    private void runOnClientThread(Runnable action) {
+        if (this.client != null) {
+            this.client.execute(action);
+        } else {
+            action.run();
+        }
     }
 
     private void onStop() {
@@ -419,10 +428,17 @@ public class EasyTierConfigScreen extends Screen {
         }
         appendLog("[INFO] 正在停止 EasyTier（异步）...");
         startButton.active = false;
-        service.stopAsync().thenRunAsync(() -> {
+        autoApplyToken++;
+        service.stopAsync().thenRun(() -> runOnClientThread(() -> {
             appendLog("[INFO] EasyTier 已停止");
             updateButtonStates();
-        }, Runnable::run);
+        })).exceptionally(ex -> {
+            runOnClientThread(() -> {
+                showError("停止异常: " + ex.getMessage());
+                updateButtonStates();
+            });
+            return null;
+        });
     }
 
     private void onRefresh() {
@@ -430,28 +446,46 @@ public class EasyTierConfigScreen extends Screen {
             appendLog("[WARN] EasyTier 未运行");
             return;
         }
+        if (refreshing) {
+            return;
+        }
+        refreshing = true;
         appendLog("[INFO] 正在刷新节点信息（异步）...");
         refreshButton.active = false;
-        service.refreshAsync().thenAcceptAsync(ip -> {
-            appendLog("---- 节点信息 ----");
+        service.refreshAsync().thenAccept(ip -> {
+            String nodeInfo;
+            String peerInfo;
             try {
-                String nodeInfo = service.getCliRunner().node();
-                appendLog(nodeInfo.isEmpty() ? "(无输出)" : nodeInfo);
+                nodeInfo = service.getCliRunner().node();
             } catch (Exception e) {
-                appendLog("[ERROR] node 查询失败: " + e.getMessage());
+                nodeInfo = "[ERROR] node 查询失败: " + e.getMessage();
             }
             try {
-                String peerInfo = service.getCliRunner().peer();
-                appendLog(peerInfo.isEmpty() ? "(无输出)" : peerInfo);
+                peerInfo = service.getCliRunner().peer();
             } catch (Exception e) {
-                appendLog("[ERROR] peer 查询失败: " + e.getMessage());
+                peerInfo = "[ERROR] peer 查询失败: " + e.getMessage();
             }
-            if (ip != null) {
-                appendLog("[INFO] 当前虚拟IP: " + ip);
-            }
-            updateAddressDisplay();
-            refreshButton.active = true;
-        }, Runnable::run);
+            final String finalNodeInfo = nodeInfo;
+            final String finalPeerInfo = peerInfo;
+            runOnClientThread(() -> {
+                appendLog("---- 节点信息 ----");
+                appendLog(finalNodeInfo == null || finalNodeInfo.isEmpty() ? "(无输出)" : finalNodeInfo);
+                appendLog(finalPeerInfo == null || finalPeerInfo.isEmpty() ? "(无输出)" : finalPeerInfo);
+                if (ip != null) {
+                    appendLog("[INFO] 当前虚拟IP: " + ip);
+                }
+                updateAddressDisplay();
+                refreshing = false;
+                updateButtonStates();
+            });
+        }).exceptionally(ex -> {
+            runOnClientThread(() -> {
+                appendLog("[ERROR] 刷新失败: " + ex.getMessage());
+                refreshing = false;
+                updateButtonStates();
+            });
+            return null;
+        });
     }
 
     private void onOpenRelayList() {
@@ -504,26 +538,36 @@ public class EasyTierConfigScreen extends Screen {
     }
 
     /**
-     * 自动应用端口转发：后台等待虚拟IP分配，然后自动检测 Minecraft 端口并添加转发
+     * 自动应用端口转发：后台等待虚拟IP分配，然后自动添加转发
      */
-    private void autoApplyPortForward() {
+    private void autoApplyPortForward(String vPortStr, int token) {
         new Thread(() -> {
             try {
                 // 等待虚拟IP分配，最多15秒
                 String ip = null;
                 for (int i = 0; i < 15; i++) {
                     Thread.sleep(1000);
+                    if (token != autoApplyToken || !service.isRunning()) {
+                        return;
+                    }
                     ip = service.getVirtualIp();
                     if (ip != null && !ip.isEmpty()) {
                         break;
                     }
                 }
+                if (token != autoApplyToken) {
+                    return;
+                }
                 if (ip == null || ip.isEmpty()) {
                     appendLog("[WARN] 自动端口转发：虚拟IP分配超时，请手动点击刷新后再应用端口转发");
                     return;
                 }
+                if (!portForwardEnabled) {
+                    appendLog("[INFO] 自动端口转发：端口转发开关已关闭，跳过");
+                    return;
+                }
 
-                // 检测 Minecraft 集成服务器端口
+                // 检测 Minecraft 集成服务器端口（等待期间用户可能刚开启局域网）
                 int mcPort = getMinecraftPort();
                 if (mcPort <= 0) {
                     appendLog("[INFO] 自动端口转发：未检测到 Minecraft 局域网端口（请先对局域网开放），跳过自动转发");
@@ -532,8 +576,7 @@ public class EasyTierConfigScreen extends Screen {
 
                 // 解析虚拟端口，为空或格式错误时回退到默认 25565
                 int vPort = 25565;
-                String vPortStr = virtualPortField != null ? virtualPortField.getText().trim() : "";
-                if (!vPortStr.isEmpty()) {
+                if (vPortStr != null && !vPortStr.isEmpty()) {
                     try {
                         int parsed = Integer.parseInt(vPortStr);
                         if (parsed >= 1 && parsed <= 65535) {
@@ -551,7 +594,7 @@ public class EasyTierConfigScreen extends Screen {
                 if (ok) {
                     appendLog("[INFO] 自动端口转发成功: tcp 0.0.0.0:" + vPort + " -> " + ip + ":" + mcPort);
                     appendLog("[INFO] 好友连接地址: " + ip + ":" + vPort);
-                    updateAddressDisplay();
+                    runOnClientThread(this::updateAddressDisplay);
                 } else {
                     appendLog("[ERROR] 自动端口转发失败，请手动点击端口转发按钮重试");
                 }
@@ -561,16 +604,15 @@ public class EasyTierConfigScreen extends Screen {
         }, "easytier-auto-portforward").start();
     }
 
-    private void onSaveNewVersion() {
+    private void onSaveConfig() {
         String name = networkNameField.getText().trim();
         if (name.isEmpty()) {
             appendLog("[ERROR] 请先填写网络名称");
             return;
         }
         TomlConfig config = buildConfigFromUi();
-        Version newVer = service.getConfigManager().saveAsNewVersion(config);
-        if (newVer != null) {
-            appendLog("[INFO] 已保存为新版本: " + newVer);
+        if (service.getConfigManager().saveConfig(config)) {
+            appendLog("[INFO] 已保存配置: " + config.toFileName());
             refreshConfigList();
             selectedNetwork = name;
             configList.updateEntries(safeListNetworks(), name);
@@ -579,19 +621,19 @@ public class EasyTierConfigScreen extends Screen {
         }
     }
 
-    private void onDeleteVersion() {
+    private void onDeleteConfig() {
         String name = networkNameField.getText().trim();
         if (name.isEmpty()) return;
 
         if (service.isRunning() && service.getProcessManager().getCurrentConfig() != null) {
             TomlConfig running = service.getProcessManager().getCurrentConfig();
-            if (name.equals(running.getNetworkName())) {
+            if (name.equalsIgnoreCase(running.getNetworkName())) {
                 appendLog("[ERROR] 正在运行的配置无法删除，请先停止");
                 return;
             }
         }
 
-        boolean deleted = service.getConfigManager().deleteConfig(name, new Version(1, 0));
+        boolean deleted = service.getConfigManager().deleteConfig(name);
         if (deleted) {
             appendLog("[INFO] 已删除配置: " + name);
             refreshConfigList();
@@ -612,6 +654,7 @@ public class EasyTierConfigScreen extends Screen {
     }
 
     private void onPortForwardToggle(boolean enabled) {
+        portForwardEnabled = enabled;
         virtualPortField.active = enabled;
         if (applyPortForwardBtn != null) {
             applyPortForwardBtn.active = enabled && service.isRunning();
@@ -621,15 +664,23 @@ public class EasyTierConfigScreen extends Screen {
     // ==================== 辅助方法 ====================
 
     private TomlConfig buildConfigFromUi() {
+        String name = networkNameField.getText().trim();
         TomlConfig config = new TomlConfig();
-        config.setNetworkName(networkNameField.getText().trim());
-        config.setInstanceName(networkNameField.getText().trim());
+        TomlConfig existing = service.getConfig(name);
+        if (existing != null && !existing.isCorrupted()) {
+            // 保留手工编辑过的 listeners / 静态 IP 设置，避免保存时丢失
+            config.setListeners(existing.getListeners());
+            config.setManualIpv4(existing.getManualIpv4());
+            config.setDhcp(existing.isDhcp());
+        } else {
+            config.setDhcp(true);
+        }
+        config.setNetworkName(name);
+        config.setInstanceName(name);
         config.setInstanceId(currentInstanceId);
         config.setRelayServer(relayServerField.getText().trim());
         config.setNetworkSecret(networkSecretField.getText().trim());
         config.setDevName(devNameField.getText().trim());
-        config.setDhcp(true);
-        config.setVersion(new Version(1, 0));
         return config;
     }
 
@@ -681,7 +732,7 @@ public class EasyTierConfigScreen extends Screen {
     private void updateFileNamePreview() {
         String name = networkNameField != null ? networkNameField.getText().trim() : "";
         String safe = FileSanitizer.sanitize(name);
-        currentFileName = safe + "_v1.0.toml";
+        currentFileName = safe + ".toml";
         if (fileNameText != null) {
             fileNameText.setMessage(Text.literal("文件: " + currentFileName));
         }
@@ -699,7 +750,7 @@ public class EasyTierConfigScreen extends Screen {
         } else {
             startButton.setMessage(Text.literal("启动"));
         }
-        refreshButton.active = running;
+        refreshButton.active = running && !refreshing;
         applyPortForwardBtn.active = running && portForwardToggle.getValue();
     }
 
@@ -774,12 +825,26 @@ public class EasyTierConfigScreen extends Screen {
     }
 
     private void appendLog(String line) {
+        final String logLine = line != null ? line : "";
         synchronized (logLines) {
-            logLines.add(line);
-            int w = this.textRenderer.getWidth(line);
-            if (w > logMaxLineWidth) logMaxLineWidth = w;
+            logLines.add(logLine);
             while (logLines.size() > MAX_LOG_LINES) {
                 logLines.remove(0);
+            }
+        }
+        // TextRenderer 只能在客户端线程访问，宽度计算统一调度回渲染线程
+        Runnable updateWidth = () -> {
+            int w = this.textRenderer.getWidth(logLine);
+            if (w > logMaxLineWidth) {
+                logMaxLineWidth = w;
+            }
+        };
+        if (this.client != null) {
+            this.client.execute(updateWidth);
+        } else {
+            int w = logLine.length() * 6;
+            if (w > logMaxLineWidth) {
+                logMaxLineWidth = w;
             }
         }
     }
@@ -880,7 +945,10 @@ public class EasyTierConfigScreen extends Screen {
         }
 
         // 垂直滚动条（右侧）
-        int totalLines = logLines.size();
+        int totalLines;
+        synchronized (logLines) {
+            totalLines = logLines.size();
+        }
         if (totalLines > visibleLines) {
             int scrollbarX = logX + logW - SCROLLBAR_W - 1;
             int scrollbarY = textTop;
@@ -911,7 +979,11 @@ public class EasyTierConfigScreen extends Screen {
             int textH = logH - LOG_TITLE_H - 2;
             int lineH = this.textRenderer.fontHeight + 1;
             int visibleLines = Math.max(1, textH / lineH);
-            int maxVScroll = Math.max(0, logLines.size() - visibleLines);
+            int totalLines;
+            synchronized (logLines) {
+                totalLines = logLines.size();
+            }
+            int maxVScroll = Math.max(0, totalLines - visibleLines);
 
             if (hasShiftDown()) {
                 // Shift + 滚轮 = 水平滚动
@@ -935,7 +1007,10 @@ public class EasyTierConfigScreen extends Screen {
         int textH = logH - LOG_TITLE_H - 2;
         int lineH = this.textRenderer.fontHeight + 1;
         int visibleLines = Math.max(1, textH / lineH);
-        int totalLines = logLines.size();
+        int totalLines;
+        synchronized (logLines) {
+            totalLines = logLines.size();
+        }
 
         // 垂直滚动条点击/拖动
         if (totalLines > visibleLines) {
@@ -967,7 +1042,10 @@ public class EasyTierConfigScreen extends Screen {
         int textH = logH - LOG_TITLE_H - 2;
         int lineH = this.textRenderer.fontHeight + 1;
         int visibleLines = Math.max(1, textH / lineH);
-        int totalLines = logLines.size();
+        int totalLines;
+        synchronized (logLines) {
+            totalLines = logLines.size();
+        }
 
         if (draggingVScroll && totalLines > visibleLines) {
             updateVScrollFromMouse(mouseY, textTop, textH, visibleLines, totalLines);

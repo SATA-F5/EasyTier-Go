@@ -28,11 +28,11 @@ public class EasyTierProcessManager {
     private final LogManager logManager;
 
     private Process currentProcess;
-    private TomlConfig currentConfig;
+    private volatile TomlConfig currentConfig;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread logReaderThread;
-    private String virtualIp;
-    private final List<PortForwardRule> activePortForwards = new ArrayList<>();
+    private volatile String virtualIp;
+    private final List<PortForwardRule> activePortForwards = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private static final int STOP_TIMEOUT_SECONDS = 3;
     private static final int DHCP_WAIT_POLL_INTERVAL_MS = 1000;
@@ -64,7 +64,11 @@ public class EasyTierProcessManager {
     }
 
     public String getVirtualIp() {
-        return virtualIp;
+        String ip = virtualIp;
+        if (ip != null && !ip.isEmpty()) {
+            return ip;
+        }
+        return EasyTierCliRunner.getGlobalVirtualIp();
     }
 
     public List<PortForwardRule> getActivePortForwards() {
@@ -119,6 +123,8 @@ public class EasyTierProcessManager {
         }
 
         this.currentConfig = config;
+        this.virtualIp = null;
+        EasyTierCliRunner.clearGlobalVirtualIp();
 
         try {
             // 构建启动命令：-c 配置文件 + 显式 no-tun/smoltcp（命令行覆盖配置文件）
@@ -134,11 +140,12 @@ public class EasyTierProcessManager {
             pb.redirectErrorStream(true);
 
             logManager.info("启动命令: " + String.join(" ", cmd));
-            currentProcess = pb.start();
+            Process process = pb.start();
+            currentProcess = process;
             running.set(true);
 
             // 启动非阻塞日志读取线程
-            logReaderThread = new Thread(this::readProcessLogs, "easytier-core-log-reader");
+            logReaderThread = new Thread(() -> readProcessLogs(process), "easytier-core-log-reader");
             logReaderThread.setDaemon(true);
             logReaderThread.start();
 
@@ -160,8 +167,18 @@ public class EasyTierProcessManager {
     /**
      * 清理所有 easytier-core 进程（公共方法，供 UI 按钮调用）
      */
-    public void cleanupAllProcesses() {
+    public synchronized void cleanupAllProcesses() {
         cleanupLeftoverProcesses();
+        running.set(false);
+        currentProcess = null;
+        currentConfig = null;
+        virtualIp = null;
+        EasyTierCliRunner.clearGlobalVirtualIp();
+        activePortForwards.clear();
+        if (logReaderThread != null) {
+            logReaderThread.interrupt();
+            logReaderThread = null;
+        }
     }
 
     /**
@@ -203,13 +220,11 @@ public class EasyTierProcessManager {
      * 启动前平台特定检查
      */
     private boolean preStartChecks() {
-        // Linux: 检查 /dev/net/tun
+        // 当前固定使用 --no-tun --use-smoltcp，不创建 TUN 设备，因此不再强制要求 /dev/net/tun
         if (PlatformDetector.getPlatform().isLinux()) {
             Path tun = Path.of("/dev/net/tun");
             if (!Files.exists(tun)) {
-                logManager.error("Linux 上 /dev/net/tun 不可用。请确保内核已加载 tun 模块（modprobe tun），"
-                        + "或在容器中授予相应权限。");
-                return false;
+                logManager.info("未检测到 /dev/net/tun，当前使用 no-tun + smoltcp 模式，继续启动");
             }
         }
         return true;
@@ -250,9 +265,9 @@ public class EasyTierProcessManager {
     /**
      * 非阻塞读取进程 stdout/stderr
      */
-    private void readProcessLogs() {
+    private void readProcessLogs(Process process) {
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(currentProcess.getInputStream(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 logManager.raw(line);
@@ -320,6 +335,7 @@ public class EasyTierProcessManager {
         currentProcess = null;
         currentConfig = null;
         virtualIp = null;
+        EasyTierCliRunner.clearGlobalVirtualIp();
 
         if (logReaderThread != null) {
             logReaderThread.interrupt();
@@ -341,6 +357,7 @@ public class EasyTierProcessManager {
         // 检查是否成功（EasyTier CLI 成功时通常无输出或返回 OK）
         boolean success = !result.startsWith("错误") && !result.toLowerCase().contains("fail");
         if (success) {
+            activePortForwards.removeIf(r -> r.protocol.equals(protocol) && r.bindPort == bindPort);
             activePortForwards.add(new PortForwardRule(protocol, bindPort, virtualIp, mcPort));
             logManager.info("端口转发已添加: " + protocol + " 0.0.0.0:" + bindPort
                     + " -> " + virtualIp + ":" + mcPort);
@@ -354,8 +371,11 @@ public class EasyTierProcessManager {
     public boolean removePortForward(String protocol, int bindPort) {
         String result = cliRunner.portForwardRemove(protocol, bindPort);
         logManager.info("端口转发移除结果: " + result);
-        activePortForwards.removeIf(r -> r.protocol.equals(protocol) && r.bindPort == bindPort);
-        return true;
+        boolean success = !result.startsWith("错误") && !result.toLowerCase().contains("fail");
+        if (success) {
+            activePortForwards.removeIf(r -> r.protocol.equals(protocol) && r.bindPort == bindPort);
+        }
+        return success;
     }
 
     /**

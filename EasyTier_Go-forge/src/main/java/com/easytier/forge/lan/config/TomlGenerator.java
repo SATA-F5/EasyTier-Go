@@ -19,11 +19,9 @@ public final class TomlGenerator {
     public static String generate(TomlConfig config) {
         StringBuilder sb = new StringBuilder();
 
-        // 顶部注释（版本信息）
+        // 顶部注释（网络信息）
         sb.append("# easytier-forge config").append(System.lineSeparator());
         sb.append("# network_name = ").append(nullSafe(config.getNetworkName())).append(System.lineSeparator());
-        sb.append("# version      = ").append(config.getVersion() != null ? config.getVersion().toString() : "v1.0")
-                .append(System.lineSeparator());
         sb.append("# generated    = ").append(DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
                 .append(System.lineSeparator());
 

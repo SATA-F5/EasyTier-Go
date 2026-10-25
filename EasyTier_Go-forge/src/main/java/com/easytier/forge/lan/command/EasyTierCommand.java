@@ -2,8 +2,8 @@ package com.easytier.forge.lan.command;
 
 import com.easytier.forge.lan.EasyTierService;
 import com.easytier.forge.lan.config.ConfigManager;
+import com.easytier.forge.lan.config.FileSanitizer;
 import com.easytier.forge.lan.config.TomlConfig;
-import com.easytier.forge.lan.config.Version;
 import com.easytier.forge.lan.process.EasyTierCliRunner;
 import com.easytier.forge.lan.process.EasyTierProcessManager;
 import com.mojang.brigadier.CommandDispatcher;
@@ -13,12 +13,35 @@ import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 
 import java.util.List;
 import java.util.Map;
 
 /**
  * /easytier 服务端指令
+ * 权限等级 2（管理员/OP）
+ *
+ * 指令树:
+ * /easytier start <network_name> <relay_server> [network_secret]
+ * /easytier stop
+ * /easytier status
+ * /easytier peer
+ * /easytier node
+ * /easytier route
+ * /easytier portforward add <tcp|udp> <bind_port> <virtual_ip> <mc_port>
+ * /easytier portforward remove <tcp|udp> <bind_port>
+ * /easytier portforward list
+ * /easytier config list
+ * /easytier config use <network_name>
+ * /easytier config save
+ * /easytier config delete <network_name>
+ * /easytier autostart on [network_name]
+ * /easytier autostart off
+ * /easytier autostart status
+ * /easytier reload
+ *
+ * 兼容旧形式: /easytier <network_name> <relay_server> [network_secret]
  */
 public class EasyTierCommand {
 
@@ -27,30 +50,35 @@ public class EasyTierCommand {
                 Commands.literal("easytier")
                         .requires(source -> source.hasPermission(2))
 
+                        // ===== start =====
                         .then(Commands.literal("start")
                                 .then(Commands.argument("network_name", StringArgumentType.word())
                                         .then(Commands.argument("relay_server", StringArgumentType.string())
                                                 .executes(EasyTierCommand::startNoSecret)
                                                 .then(Commands.argument("network_secret", StringArgumentType.string())
-                                                        .executes(EasyTierCommand::startWithSecret)
-                                                        .then(Commands.argument("version", StringArgumentType.word())
-                                                                .executes(EasyTierCommand::startWithVersion))))))
+                                                        .executes(EasyTierCommand::startWithSecret)))))
 
+                        // ===== stop =====
                         .then(Commands.literal("stop")
                                 .executes(EasyTierCommand::stop))
 
+                        // ===== status =====
                         .then(Commands.literal("status")
                                 .executes(EasyTierCommand::status))
 
+                        // ===== peer =====
                         .then(Commands.literal("peer")
                                 .executes(EasyTierCommand::peer))
 
+                        // ===== node =====
                         .then(Commands.literal("node")
                                 .executes(EasyTierCommand::node))
 
+                        // ===== route =====
                         .then(Commands.literal("route")
                                 .executes(EasyTierCommand::route))
 
+                        // ===== portforward =====
                         .then(Commands.literal("portforward")
                                 .then(Commands.literal("add")
                                         .then(Commands.argument("protocol", StringArgumentType.word())
@@ -65,77 +93,83 @@ public class EasyTierCommand {
                                 .then(Commands.literal("list")
                                         .executes(EasyTierCommand::portForwardList)))
 
+                        // ===== config =====
                         .then(Commands.literal("config")
                                 .then(Commands.literal("list")
                                         .executes(EasyTierCommand::configList))
                                 .then(Commands.literal("use")
                                         .then(Commands.argument("network_name", StringArgumentType.word())
-                                                .executes(EasyTierCommand::configUseNoVersion)
-                                                .then(Commands.argument("version", StringArgumentType.word())
-                                                        .executes(EasyTierCommand::configUseWithVersion))))
+                                                .executes(EasyTierCommand::configUse)))
                                 .then(Commands.literal("save")
-                                        .executes(EasyTierCommand::configSaveNoVersion)
-                                        .then(Commands.argument("version", StringArgumentType.word())
-                                                .executes(EasyTierCommand::configSaveWithVersion)))
+                                        .executes(EasyTierCommand::configSave))
                                 .then(Commands.literal("delete")
                                         .then(Commands.argument("network_name", StringArgumentType.word())
-                                                .executes(EasyTierCommand::configDeleteNoVersion)
-                                                .then(Commands.argument("version", StringArgumentType.word())
-                                                        .executes(EasyTierCommand::configDeleteWithVersion)))))
+                                                .executes(EasyTierCommand::configDelete))))
 
+                        // ===== reload =====
                         .then(Commands.literal("reload")
                                 .executes(EasyTierCommand::reload))
 
+                        // ===== autostart =====
+                        .then(Commands.literal("autostart")
+                                .executes(EasyTierCommand::autoStartStatus)
+                                .then(Commands.literal("on")
+                                        .executes(ctx -> doAutoStart(ctx, true, null))
+                                        .then(Commands.argument("network_name", StringArgumentType.word())
+                                                .executes(ctx -> doAutoStart(ctx, true,
+                                                        StringArgumentType.getString(ctx, "network_name")))))
+                                .then(Commands.literal("off")
+                                        .executes(ctx -> doAutoStart(ctx, false, null)))
+                                .then(Commands.literal("status")
+                                        .executes(EasyTierCommand::autoStartStatus)))
+
+                        // ===== 旧形式兼容: /easytier <name> <server> [secret] =====
                         .then(Commands.argument("network_name", StringArgumentType.word())
                                 .then(Commands.argument("relay_server", StringArgumentType.string())
                                         .executes(EasyTierCommand::legacyStartNoSecret)
                                         .then(Commands.argument("network_secret", StringArgumentType.string())
                                                 .executes(EasyTierCommand::legacyStartWithSecret))))
 
+                        // 无参数显示用法
                         .executes(EasyTierCommand::showUsage)
         );
     }
+
+    // ==================== start ====================
 
     private static int startNoSecret(CommandContext<CommandSourceStack> ctx) {
         return doStart(ctx,
                 StringArgumentType.getString(ctx, "network_name"),
                 StringArgumentType.getString(ctx, "relay_server"),
-                "", null);
+                "");
     }
 
     private static int startWithSecret(CommandContext<CommandSourceStack> ctx) {
         return doStart(ctx,
                 StringArgumentType.getString(ctx, "network_name"),
                 StringArgumentType.getString(ctx, "relay_server"),
-                StringArgumentType.getString(ctx, "network_secret"), null);
-    }
-
-    private static int startWithVersion(CommandContext<CommandSourceStack> ctx) {
-        return doStart(ctx,
-                StringArgumentType.getString(ctx, "network_name"),
-                StringArgumentType.getString(ctx, "relay_server"),
-                StringArgumentType.getString(ctx, "network_secret"),
-                StringArgumentType.getString(ctx, "version"));
+                StringArgumentType.getString(ctx, "network_secret"));
     }
 
     private static int legacyStartNoSecret(CommandContext<CommandSourceStack> ctx) {
         return doStart(ctx,
                 StringArgumentType.getString(ctx, "network_name"),
                 StringArgumentType.getString(ctx, "relay_server"),
-                "", null);
+                "");
     }
 
     private static int legacyStartWithSecret(CommandContext<CommandSourceStack> ctx) {
         return doStart(ctx,
                 StringArgumentType.getString(ctx, "network_name"),
                 StringArgumentType.getString(ctx, "relay_server"),
-                StringArgumentType.getString(ctx, "network_secret"), null);
+                StringArgumentType.getString(ctx, "network_secret"));
     }
 
     private static int doStart(CommandContext<CommandSourceStack> ctx,
-                               String name, String relay, String secret, String versionStr) {
+                               String name, String relay, String secret) {
         EasyTierService service = EasyTierService.getInstance();
 
+        // Android 阻断
         if (service.isAndroid()) {
             ctx.getSource().sendFailure(Component.literal(
                     "EasyTier Forge LAN 不支持 Android 平台。请使用 EasyTier 官方 Android 应用建立虚拟网络，然后在 Minecraft 中直接连接虚拟 IP。"));
@@ -151,6 +185,7 @@ public class EasyTierCommand {
             return 0;
         }
 
+        // 参数校验
         if (name == null || name.isEmpty() || name.length() > 32) {
             ctx.getSource().sendFailure(Component.literal("网络名称必须为 1-32 个字符，允许字母、数字、下划线、连字符"));
             return 0;
@@ -164,30 +199,19 @@ public class EasyTierCommand {
             return 0;
         }
 
-        Version version;
-        if (versionStr != null) {
-            version = Version.parse(versionStr);
-            if (version == null) {
-                ctx.getSource().sendFailure(Component.literal("版本格式错误，应为 v1.0 格式"));
-                return 0;
-            }
-        } else {
-            TomlConfig latest = service.getLatestVersion(name);
-            version = (latest != null && latest.getVersion() != null)
-                    ? latest.getVersion() : new Version(1, 0);
-        }
-
-        boolean ok = service.start(name, version, relay, secret, "et_forge", true);
+        boolean ok = service.start(name, relay, secret, "et_forge", true);
         if (ok) {
-            String fileName = com.easytier.forge.lan.config.FileSanitizer.sanitize(name) + "_" + version + ".toml";
+            String fileName = FileSanitizer.sanitize(name) + ".toml";
             ctx.getSource().sendSuccess(() -> Component.literal(
-                    "EasyTier 已启动: " + name + " @ " + version + " (" + fileName + ")"), true);
+                    "EasyTier 已启动: " + name + " (" + fileName + ")"), true);
             return 1;
         } else {
             ctx.getSource().sendFailure(Component.literal("EasyTier 启动失败，请查看日志"));
             return 0;
         }
     }
+
+    // ==================== stop ====================
 
     private static int stop(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
@@ -200,6 +224,8 @@ public class EasyTierCommand {
         return 1;
     }
 
+    // ==================== status ====================
+
     private static int status(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
         EasyTierProcessManager pm = service.getProcessManager();
@@ -211,13 +237,11 @@ public class EasyTierCommand {
 
         TomlConfig cfg = pm.getCurrentConfig();
         String name = cfg != null && cfg.getNetworkName() != null ? cfg.getNetworkName() : "?";
-        String ver = cfg != null && cfg.getVersion() != null ? cfg.getVersion().toString() : "?";
         String fileName = cfg != null ? cfg.toFileName() : "?";
         String ip = service.getVirtualIp();
 
         StringBuilder sb = new StringBuilder();
-        sb.append("运行中: ").append(name).append(" @ ").append(ver)
-                .append("（").append(fileName).append("）");
+        sb.append("运行中: ").append(name).append("（").append(fileName).append("）");
         if (ip != null) {
             sb.append("，虚拟 IP ").append(ip);
         } else {
@@ -227,6 +251,8 @@ public class EasyTierCommand {
         ctx.getSource().sendSuccess(() -> Component.literal(sb.toString()), false);
         return 1;
     }
+
+    // ==================== peer / node / route ====================
 
     private static int peer(CommandContext<CommandSourceStack> ctx) {
         return runCliAndFeedback(ctx, "peer");
@@ -258,6 +284,8 @@ public class EasyTierCommand {
         ctx.getSource().sendSuccess(() -> Component.literal(finalOutput), false);
         return 1;
     }
+
+    // ==================== portforward ====================
 
     private static int portForwardAdd(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
@@ -293,10 +321,16 @@ public class EasyTierCommand {
         }
         String protocol = StringArgumentType.getString(ctx, "protocol").toLowerCase();
         int bindPort = IntegerArgumentType.getInteger(ctx, "bind_port");
-        service.getProcessManager().removePortForward(protocol, bindPort);
-        ctx.getSource().sendSuccess(() -> Component.literal(
-                "端口转发已移除: " + protocol + " 0.0.0.0:" + bindPort), true);
-        return 1;
+        boolean ok = service.getProcessManager().removePortForward(protocol, bindPort);
+        if (ok) {
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "端口转发已移除: " + protocol + " 0.0.0.0:" + bindPort), true);
+            return 1;
+        } else {
+            ctx.getSource().sendFailure(Component.literal(
+                    "端口转发移除失败: " + protocol + " 0.0.0.0:" + bindPort));
+            return 0;
+        }
     }
 
     private static int portForwardList(CommandContext<CommandSourceStack> ctx) {
@@ -327,31 +361,23 @@ public class EasyTierCommand {
         return 1;
     }
 
+    // ==================== config ====================
+
     private static int configList(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
-        Map<String, List<TomlConfig>> all = service.scanAllConfigs();
+        Map<String, TomlConfig> all = service.scanAllConfigs();
         if (all.isEmpty()) {
             ctx.getSource().sendSuccess(() -> Component.literal("(无配置文件)"), false);
             return 1;
         }
         StringBuilder sb = new StringBuilder("配置列表:\n");
-        for (Map.Entry<String, List<TomlConfig>> entry : all.entrySet()) {
-            sb.append("  ").append(entry.getKey()).append(": ");
-            List<TomlConfig> versions = entry.getValue();
-            for (int i = 0; i < versions.size(); i++) {
-                TomlConfig cfg = versions.get(i);
-                if (cfg.isCorrupted()) {
-                    sb.append("[损坏]");
-                } else {
-                    sb.append(cfg.getVersion() != null ? cfg.getVersion().toString() : "v?");
-                }
-                if (i < versions.size() - 1) sb.append(", ");
-            }
-            if (!versions.isEmpty()) {
-                TomlConfig latest = versions.get(versions.size() - 1);
-                if (!latest.isCorrupted() && latest.getVersion() != null) {
-                    sb.append(" (latest=").append(latest.getVersion()).append(")");
-                }
+        for (Map.Entry<String, TomlConfig> entry : all.entrySet()) {
+            sb.append("  ").append(entry.getKey());
+            TomlConfig cfg = entry.getValue();
+            if (cfg.isCorrupted()) {
+                sb.append(" [损坏]");
+            } else {
+                sb.append(" (").append(cfg.toFileName()).append(")");
             }
             sb.append("\n");
         }
@@ -360,82 +386,41 @@ public class EasyTierCommand {
         return 1;
     }
 
-    private static int configUseNoVersion(CommandContext<CommandSourceStack> ctx) {
-        return doConfigUse(ctx, StringArgumentType.getString(ctx, "network_name"), null);
-    }
-
-    private static int configUseWithVersion(CommandContext<CommandSourceStack> ctx) {
-        return doConfigUse(ctx,
-                StringArgumentType.getString(ctx, "network_name"),
-                StringArgumentType.getString(ctx, "version"));
-    }
-
-    private static int doConfigUse(CommandContext<CommandSourceStack> ctx, String name, String versionStr) {
+    private static int configUse(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
         ConfigManager cm = service.getConfigManager();
+        String name = StringArgumentType.getString(ctx, "network_name");
 
-        Version version;
-        if (versionStr != null) {
-            version = Version.parse(versionStr);
-            if (version == null) {
-                ctx.getSource().sendFailure(Component.literal("版本格式错误"));
-                return 0;
-            }
-        } else {
-            TomlConfig latest = cm.getLatestVersion(name);
-            if (latest == null || latest.getVersion() == null) {
-                ctx.getSource().sendFailure(Component.literal("未找到网络配置: " + name));
-                return 0;
-            }
-            version = latest.getVersion();
-        }
-
-        if (!cm.configExists(name, version)) {
-            ctx.getSource().sendFailure(Component.literal("配置不存在: " + name + "_" + version + ".toml"));
+        if (!cm.configExists(name)) {
+            ctx.getSource().sendFailure(Component.literal(
+                    "配置不存在: " + FileSanitizer.sanitize(name) + ".toml"));
             return 0;
         }
 
-        TomlConfig cfg = cm.loadConfig(name, version);
+        TomlConfig cfg = cm.loadConfig(name);
         if (cfg == null || cfg.isCorrupted()) {
             ctx.getSource().sendFailure(Component.literal("配置已损坏"));
             return 0;
         }
 
-        cm.writeActive(new ConfigManager.ActiveConfig(name, version.toString(), true));
+        String actualName = cfg.getNetworkName() != null && !cfg.getNetworkName().isEmpty()
+                ? cfg.getNetworkName() : name;
+        cm.writeActive(new ConfigManager.ActiveConfig(actualName, true));
         ctx.getSource().sendSuccess(() -> Component.literal(
-                "已设置活动配置: " + name + " @ " + version
+                "已设置活动配置: " + actualName
+                        + "\n文件: " + cfg.toFileName()
                         + "\n中继: " + (cfg.getRelayServer() != null ? cfg.getRelayServer() : "?")
                         + "\n密码: " + (cfg.getNetworkSecret() != null && !cfg.getNetworkSecret().isEmpty() ? "已设置" : "无")), false);
         return 1;
     }
 
-    private static int configSaveNoVersion(CommandContext<CommandSourceStack> ctx) {
-        return doConfigSave(ctx, null);
-    }
-
-    private static int configSaveWithVersion(CommandContext<CommandSourceStack> ctx) {
-        return doConfigSave(ctx, StringArgumentType.getString(ctx, "version"));
-    }
-
-    private static int doConfigSave(CommandContext<CommandSourceStack> ctx, String versionStr) {
+    private static int configSave(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
         EasyTierProcessManager pm = service.getProcessManager();
         TomlConfig current = pm.getCurrentConfig();
         if (current == null) {
             ctx.getSource().sendFailure(Component.literal("当前没有运行中的配置"));
             return 0;
-        }
-
-        if (versionStr != null) {
-            Version v = Version.parse(versionStr);
-            if (v == null) {
-                ctx.getSource().sendFailure(Component.literal("版本格式错误"));
-                return 0;
-            }
-            current.setVersion(v);
-        } else {
-            Version next = service.getConfigManager().getNextVersion(current.getNetworkName());
-            current.setVersion(next);
         }
 
         boolean ok = service.getConfigManager().saveConfig(current);
@@ -449,108 +434,81 @@ public class EasyTierCommand {
         }
     }
 
-    private static int configDeleteNoVersion(CommandContext<CommandSourceStack> ctx) {
-        return doConfigDelete(ctx, StringArgumentType.getString(ctx, "network_name"), null);
-    }
-
-    private static int configDeleteWithVersion(CommandContext<CommandSourceStack> ctx) {
-        return doConfigDelete(ctx,
-                StringArgumentType.getString(ctx, "network_name"),
-                StringArgumentType.getString(ctx, "version"));
-    }
-
-    private static int doConfigDelete(CommandContext<CommandSourceStack> ctx, String name, String versionStr) {
+    private static int configDelete(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
         ConfigManager cm = service.getConfigManager();
+        String name = StringArgumentType.getString(ctx, "network_name");
 
+        // 检查正在运行的配置
         if (service.isRunning() && service.getProcessManager().getCurrentConfig() != null) {
             TomlConfig running = service.getProcessManager().getCurrentConfig();
-            if (name.equals(running.getNetworkName())) {
-                if (versionStr == null
-                        || (running.getVersion() != null && running.getVersion().toString().equals(versionStr))) {
-                    ctx.getSource().sendFailure(Component.literal("正在运行的配置无法删除，请先停止"));
-                    return 0;
-                }
+            if (name.equalsIgnoreCase(running.getNetworkName())) {
+                ctx.getSource().sendFailure(Component.literal("正在运行的配置无法删除，请先停止"));
+                return 0;
             }
         }
 
-        if (versionStr == null) {
-            int count = cm.deleteNetwork(name);
-            if (count > 0) {
-                ctx.getSource().sendSuccess(() -> Component.literal(
-                        "已删除网络 " + name + " 的 " + count + " 个版本"), true);
-                return 1;
-            } else {
-                ctx.getSource().sendFailure(Component.literal("未找到网络配置: " + name));
-                return 0;
-            }
+        boolean ok = cm.deleteConfig(name);
+        if (ok) {
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "已删除: " + FileSanitizer.sanitize(name) + ".toml"), true);
+            return 1;
         } else {
-            Version v = Version.parse(versionStr);
-            if (v == null) {
-                ctx.getSource().sendFailure(Component.literal("版本格式错误"));
-                return 0;
-            }
-            boolean ok = cm.deleteConfig(name, v);
-            if (ok) {
-                ctx.getSource().sendSuccess(() -> Component.literal(
-                        "已删除: " + name + "_" + v + ".toml"), true);
-                return 1;
-            } else {
-                ctx.getSource().sendFailure(Component.literal("配置不存在: " + name + "_" + v + ".toml"));
-                return 0;
-            }
+            ctx.getSource().sendFailure(Component.literal(
+                    "配置不存在: " + FileSanitizer.sanitize(name) + ".toml"));
+            return 0;
         }
     }
+
+    // ==================== reload ====================
 
     private static int reload(CommandContext<CommandSourceStack> ctx) {
         EasyTierService service = EasyTierService.getInstance();
         ConfigManager cm = service.getConfigManager();
         ConfigManager.ActiveConfig active = cm.readActive();
-
-        if (active == null || active.network_name == null) {
-            ctx.getSource().sendFailure(Component.literal(
-                    "未设置活动配置，请先执行 /easytier config use <network_name> [version]"));
-            return 0;
-        }
-
-        Version version = active.version != null ? Version.parse(active.version) : null;
-        if (version == null) {
-            TomlConfig latest = cm.getLatestVersion(active.network_name);
-            if (latest != null && latest.getVersion() != null) {
-                version = latest.getVersion();
-            } else {
-                version = new Version(1, 0);
+        if (active == null || active.network_name == null || !cm.configExists(active.network_name)) {
+            // 兼容只用 /easytier autostart on 写入的世界级 active.json
+            ConfigManager.ActiveConfig worldActive = cm.readWorldActive(currentWorldName(ctx));
+            if (worldActive != null && worldActive.network_name != null) {
+                active = worldActive;
             }
         }
 
-        if (!cm.configExists(active.network_name, version)) {
+        if (active == null || active.network_name == null) {
             ctx.getSource().sendFailure(Component.literal(
-                    "配置文件不存在: " + active.network_name + "_" + version + ".toml，请执行 /easytier config list 查看可用配置"));
+                    "未设置活动配置，请先执行 /easytier config use <network_name>"));
             return 0;
         }
 
-        TomlConfig cfg = cm.loadConfig(active.network_name, version);
+        if (!cm.configExists(active.network_name)) {
+            ctx.getSource().sendFailure(Component.literal(
+                    "配置文件不存在: " + FileSanitizer.sanitize(active.network_name)
+                            + ".toml，请执行 /easytier config list 查看可用配置"));
+            return 0;
+        }
+
+        TomlConfig cfg = cm.loadConfig(active.network_name);
         if (cfg == null || cfg.isCorrupted()) {
             ctx.getSource().sendFailure(Component.literal("配置文件已损坏"));
             return 0;
         }
 
+        // 停止当前实例（如果在运行）
         if (service.isRunning()) {
             service.stop();
         }
 
+        String name = cfg.getNetworkName() != null && !cfg.getNetworkName().isEmpty()
+                ? cfg.getNetworkName() : active.network_name;
         boolean ok = service.start(
-                cfg.getNetworkName(), version,
+                name,
                 cfg.getRelayServer() != null ? cfg.getRelayServer() : "",
                 cfg.getNetworkSecret() != null ? cfg.getNetworkSecret() : "",
                 cfg.getDevName() != null ? cfg.getDevName() : "et_forge",
                 cfg.isDhcp());
 
         if (ok) {
-            final String restartName = active.network_name;
-            final Version restartVersion = version;
-            ctx.getSource().sendSuccess(() -> Component.literal(
-                    "已重启: " + restartName + " @ " + restartVersion), true);
+            ctx.getSource().sendSuccess(() -> Component.literal("已重启: " + name), true);
             return 1;
         } else {
             ctx.getSource().sendFailure(Component.literal("重启失败，请查看日志"));
@@ -558,23 +516,140 @@ public class EasyTierCommand {
         }
     }
 
+    // ==================== autostart ====================
+
+    private static int autoStartStatus(CommandContext<CommandSourceStack> ctx) {
+        EasyTierService service = EasyTierService.getInstance();
+        ConfigManager cm = service.getConfigManager();
+        String worldName = currentWorldName(ctx);
+
+        boolean globalEnabled = cm.isAutoStartOnWorldLoad();
+        ConfigManager.ActiveConfig active = cm.readWorldActive(worldName);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("服务器自启动开关: ").append(globalEnabled ? "开启" : "关闭");
+        sb.append("\n世界: ").append(worldName);
+        if (active != null && active.network_name != null && !active.network_name.isEmpty()) {
+            sb.append("\n世界配置: ").append(active.network_name);
+            if (!cm.configExists(active.network_name)) {
+                sb.append("（配置文件不存在）");
+            }
+            sb.append("\n世界自启动: ").append(active.auto_start ? "开启" : "关闭");
+        } else {
+            sb.append("\n世界配置: 未设置");
+        }
+
+        String message = sb.toString();
+        ctx.getSource().sendSuccess(() -> Component.literal(message), false);
+        return 1;
+    }
+
+    private static int doAutoStart(CommandContext<CommandSourceStack> ctx,
+                                   boolean enabled, String requestedName) {
+        EasyTierService service = EasyTierService.getInstance();
+        ConfigManager cm = service.getConfigManager();
+        String worldName = currentWorldName(ctx);
+
+        if (!enabled) {
+            boolean switchOk = cm.setAutoStartOnWorldLoad(false);
+            boolean worldOk = true;
+            ConfigManager.ActiveConfig existing = cm.readWorldActive(worldName);
+            if (switchOk && existing != null && existing.network_name != null && !existing.network_name.isEmpty()) {
+                worldOk = cm.writeWorldActive(worldName, new ConfigManager.ActiveConfig(existing.network_name, false));
+            }
+            if (switchOk && worldOk) {
+                ctx.getSource().sendSuccess(() -> Component.literal(
+                        "已关闭服务器世界自启动（世界: " + worldName + "）"), true);
+                return 1;
+            } else {
+                ctx.getSource().sendFailure(Component.literal("关闭自启动失败，请检查 server.toml 写入权限"));
+                return 0;
+            }
+        }
+
+        String name = requestedName;
+        if (name == null || name.isEmpty()) {
+            TomlConfig current = service.getProcessManager().getCurrentConfig();
+            if (current != null && current.getNetworkName() != null && !current.getNetworkName().isEmpty()) {
+                name = current.getNetworkName();
+            } else if (service.getCurrentNetworkName() != null && !service.getCurrentNetworkName().isEmpty()) {
+                name = service.getCurrentNetworkName();
+            }
+        }
+        if (name == null || name.isEmpty()) {
+            List<String> configs = cm.listNetworkNames();
+            if (configs.size() == 1) {
+                name = configs.get(0);
+            } else {
+                String available = configs.isEmpty() ? "无" : String.join(", ", configs);
+                ctx.getSource().sendFailure(Component.literal(
+                        "请指定网络配置: /easytier autostart on <网络名称>（可用配置: " + available + "）"));
+                return 0;
+            }
+        }
+
+        if (!cm.configExists(name)) {
+            ctx.getSource().sendFailure(Component.literal(
+                    "配置不存在: " + FileSanitizer.sanitize(name) + ".toml"));
+            return 0;
+        }
+        TomlConfig cfg = cm.loadConfig(name);
+        if (cfg == null || cfg.isCorrupted()) {
+            ctx.getSource().sendFailure(Component.literal("配置已损坏: " + FileSanitizer.sanitize(name) + ".toml"));
+            return 0;
+        }
+        if (cfg.getNetworkName() != null && !cfg.getNetworkName().isEmpty()) {
+            name = cfg.getNetworkName();
+        }
+
+        boolean switchOk = cm.setAutoStartOnWorldLoad(true);
+        boolean worldOk = switchOk && cm.writeWorldActive(worldName, new ConfigManager.ActiveConfig(name, true));
+        if (switchOk && worldOk) {
+            final String startedName = name;
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "已开启服务器世界自启动: " + startedName + "（世界: " + worldName + "）"), true);
+            return 1;
+        } else {
+            if (switchOk) {
+                cm.setAutoStartOnWorldLoad(false);
+            }
+            ctx.getSource().sendFailure(Component.literal("开启自启动失败，请检查配置目录写入权限"));
+            return 0;
+        }
+    }
+
+    private static String currentWorldName(CommandContext<CommandSourceStack> ctx) {
+        MinecraftServer server = ctx.getSource().getServer();
+        if (server == null) {
+            return "world";
+        }
+        String name = server.getWorldData().getLevelName();
+        return name != null && !name.isEmpty() ? name : "world";
+    }
+
+    // ==================== usage ====================
+
     private static int showUsage(CommandContext<CommandSourceStack> ctx) {
-        String usage = "EasyTier 命令用法:\n"
-                + "/easytier start <网络名称> <中继服务器> [密码] [版本]  - 启动 EasyTier\n"
-                + "/easytier stop                                      - 停止 EasyTier\n"
-                + "/easytier status                                    - 查看状态\n"
-                + "/easytier peer                                      - 查看节点列表\n"
-                + "/easytier node                                      - 查看本节点信息\n"
-                + "/easytier route                                     - 查看路由表\n"
-                + "/easytier portforward add <tcp|udp> <端口> <虚拟IP> <MC端口>\n"
-                + "/easytier portforward remove <tcp|udp> <端口>\n"
-                + "/easytier portforward list\n"
-                + "/easytier config list\n"
-                + "/easytier config use <网络名称> [版本]\n"
-                + "/easytier config save [版本]\n"
-                + "/easytier config delete <网络名称> [版本]\n"
-                + "/easytier reload\n"
-                + "兼容: /easytier <网络名称> <中继服务器> [密码]";
+        String usage = """
+                EasyTier 命令用法:
+                /easytier start <网络名称> <中继服务器> [密码]  - 启动 EasyTier
+                /easytier stop                                  - 停止 EasyTier
+                /easytier status                                - 查看状态
+                /easytier peer                                  - 查看节点列表
+                /easytier node                                  - 查看本节点信息
+                /easytier route                                 - 查看路由表
+                /easytier portforward add <tcp|udp> <端口> <虚拟IP> <MC端口>
+                /easytier portforward remove <tcp|udp> <端口>
+                /easytier portforward list
+                /easytier config list
+                /easytier config use <网络名称>
+                /easytier config save
+                /easytier config delete <网络名称>
+                /easytier autostart on [网络名称]
+                /easytier autostart off
+                /easytier autostart status
+                /easytier reload
+                兼容: /easytier <网络名称> <中继服务器> [密码]""";
         ctx.getSource().sendSuccess(() -> Component.literal(usage), false);
         return 1;
     }

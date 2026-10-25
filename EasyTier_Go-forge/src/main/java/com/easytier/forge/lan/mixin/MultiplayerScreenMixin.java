@@ -1,5 +1,6 @@
 package com.easytier.forge.lan.mixin;
 
+import com.easytier.forge.lan.EasyTierForgeLan;
 import com.easytier.forge.lan.EasyTierService;
 import com.easytier.forge.lan.client.EasyTierConfigScreen;
 import com.easytier.forge.lan.platform.PlatformDetector;
@@ -35,7 +36,7 @@ public abstract class MultiplayerScreenMixin extends Screen {
             return;
         }
 
-        Path configDir = this.minecraft.gameDirectory.toPath().resolve("config").resolve("easytier_go");
+        Path configDir = EasyTierForgeLan.getConfigDir();
         service = EasyTierService.getInstance(configDir);
 
         int btnW = 90;

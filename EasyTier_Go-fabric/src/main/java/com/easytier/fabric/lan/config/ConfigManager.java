@@ -10,22 +10,26 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 配置文件管理器
  * 负责扫描、加载、保存、删除 configs/ 下的 TOML 配置
- * 配置列表和版本列表通过扫描目录动态生成，不维护额外索引文件
+ * 每个网络只对应一个配置文件：<网络名称>.toml（如 mc.toml），不再使用版本号
+ * 配置列表通过扫描目录动态生成，不维护额外索引文件
  */
 public class ConfigManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("EasyTierConfig");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Pattern LEGACY_FILE_NAME = Pattern.compile("^(.+)_v(\\d+)\\.(\\d+)$");
 
     private final Path baseDir;
     private final Path configsDir;
@@ -38,6 +42,7 @@ public class ConfigManager {
         } catch (IOException e) {
             LOGGER.error("无法创建配置目录: {}", e.getMessage());
         }
+        migrateLegacyFileNames();
     }
 
     public Path getConfigsDir() {
@@ -49,48 +54,41 @@ public class ConfigManager {
     }
 
     /**
-     * 扫描所有 TOML 配置，按网络名称分组
-     * key = 网络名称（instance_name），value = 该网络的所有版本（按版本号升序）
+     * 扫描所有 TOML 配置
+     * key = 网络名称，value = 该网络唯一的配置
      */
-    public Map<String, List<TomlConfig>> scanAllConfigs() {
-        Map<String, List<TomlConfig>> result = new LinkedHashMap<>();
+    public synchronized Map<String, TomlConfig> scanAllConfigs() {
+        Map<String, TomlConfig> result = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         if (!Files.exists(configsDir)) {
             return result;
         }
 
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(configsDir, "*.toml")) {
             for (Path file : stream) {
+                // 已存在同名新格式文件时，忽略残留的旧版 <名称>_vX.Y.toml
+                Matcher legacyMatcher = LEGACY_FILE_NAME.matcher(baseName(file));
+                if (legacyMatcher.matches()
+                        && Files.exists(configsDir.resolve(legacyMatcher.group(1) + ".toml"))) {
+                    continue;
+                }
                 TomlConfig cfg = loadConfig(file);
                 if (cfg == null) {
                     continue;
                 }
-                String name = cfg.getInstanceName();
+                String name = cfg.getNetworkName();
                 if (name == null || name.isEmpty()) {
-                    // 从文件名解析
-                    String[] parsed = FileSanitizer.parseFileName(file.getFileName().toString());
-                    if (parsed != null) {
-                        name = parsed[0];
-                        cfg.setInstanceName(name);
-                    } else {
-                        name = file.getFileName().toString();
-                    }
+                    name = cfg.getInstanceName();
                 }
-                result.computeIfAbsent(name, k -> new ArrayList<>()).add(cfg);
+                if (name == null || name.isEmpty()) {
+                    name = baseName(file);
+                }
+                if (name != null && !name.isEmpty()) {
+                    cfg.setNetworkName(name);
+                    result.put(name, cfg);
+                }
             }
         } catch (IOException e) {
             LOGGER.error("扫描配置目录失败: {}", e.getMessage());
-        }
-
-        // 每个网络内按版本排序
-        for (List<TomlConfig> list : result.values()) {
-            list.sort((a, b) -> {
-                Version va = a.getVersion();
-                Version vb = b.getVersion();
-                if (va == null && vb == null) return 0;
-                if (va == null) return -1;
-                if (vb == null) return 1;
-                return va.compareTo(vb);
-            });
         }
 
         return result;
@@ -104,54 +102,68 @@ public class ConfigManager {
     }
 
     /**
-     * 获取指定网络的所有版本
+     * 根据网络名称加载配置
      */
-    public List<TomlConfig> getVersions(String networkName) {
-        Map<String, List<TomlConfig>> all = scanAllConfigs();
-        return all.getOrDefault(networkName, Collections.emptyList());
-    }
-
-    /**
-     * 获取指定网络的最新版本
-     */
-    public TomlConfig getLatestVersion(String networkName) {
-        List<TomlConfig> versions = getVersions(networkName);
-        if (versions.isEmpty()) {
+    public TomlConfig loadConfig(String networkName) {
+        if (networkName == null || networkName.isEmpty()) {
             return null;
         }
-        return versions.get(versions.size() - 1);
+        Path file = findConfigFile(networkName);
+        return file != null ? loadConfig(file) : null;
     }
 
     /**
-     * 根据网络名称和版本加载配置
+     * 查找网络对应的配置文件。
+     * 优先使用新格式 <名称>.toml；如果迁移失败或文件是后来放入的，
+     * 回退到旧格式 <名称>_v<主>.<次>.toml 中版本最高的一个。
      */
-    public TomlConfig loadConfig(String networkName, Version version) {
-        String fileName = FileSanitizer.sanitize(networkName) + "_" + version.toString() + ".toml";
-        Path file = configsDir.resolve(fileName);
-        return loadConfig(file);
+    private Path findConfigFile(String networkName) {
+        String safe = FileSanitizer.sanitize(networkName);
+        Path target = configsDir.resolve(safe + ".toml");
+        if (Files.exists(target)) {
+            return target;
+        }
+
+        Path best = null;
+        int bestVersion = Integer.MIN_VALUE;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(configsDir, "*.toml")) {
+            for (Path file : stream) {
+                Matcher matcher = LEGACY_FILE_NAME.matcher(baseName(file));
+                if (!matcher.matches() || !safe.equalsIgnoreCase(matcher.group(1))) {
+                    continue;
+                }
+                int version = legacyVersion(file);
+                if (version > bestVersion) {
+                    bestVersion = version;
+                    best = file;
+                }
+            }
+        } catch (IOException ignored) {
+            // 目录不可读时返回 null
+        }
+        return best;
     }
 
     /**
      * 从文件加载配置
      */
-    public TomlConfig loadConfig(Path file) {
+    public synchronized TomlConfig loadConfig(Path file) {
         if (!Files.exists(file)) {
             return null;
         }
         try {
             String content = Files.readString(file, StandardCharsets.UTF_8);
+            if (content.startsWith("\uFEFF")) {
+                content = content.substring(1);
+            }
             TomlConfig config = TomlParser.parse(content);
             config.setSourceFileName(file.getFileName().toString());
 
-            // 从文件名补充版本（如果 TOML 注释中没有）
-            if (config.getVersion() == null) {
-                String[] parsed = FileSanitizer.parseFileName(file.getFileName().toString());
-                if (parsed != null) {
-                    Version v = Version.parse(parsed[1]);
-                    if (v != null) {
-                        config.setVersion(v);
-                    }
-                }
+            // 网络名称为空时从 instance_name 或文件名补全，避免保存/启动路径不一致
+            if (config.getNetworkName() == null || config.getNetworkName().isEmpty()) {
+                String instanceName = config.getInstanceName();
+                config.setNetworkName(instanceName != null && !instanceName.isEmpty()
+                        ? instanceName : baseName(file));
             }
 
             // 字段缺失时用默认值补全（仅内存，不写盘）
@@ -179,12 +191,12 @@ public class ConfigManager {
     }
 
     /**
-     * 保存配置为指定版本
-     * 如果文件已存在则覆盖
+     * 保存配置。文件名固定为 <sanitize(network_name)>.toml，如果已存在则覆盖。
      */
-    public boolean saveConfig(TomlConfig config) {
-        if (config.getVersion() == null) {
-            config.setVersion(new Version(1, 0));
+    public synchronized boolean saveConfig(TomlConfig config) {
+        if (config == null || config.getNetworkName() == null || config.getNetworkName().isEmpty()) {
+            LOGGER.error("保存配置失败: 网络名称为空");
+            return false;
         }
         String fileName = config.toFileName();
         Path file = configsDir.resolve(fileName);
@@ -200,78 +212,259 @@ public class ConfigManager {
     }
 
     /**
-     * 保存为次版本 +1 的新版本
-     * 返回新版本号
+     * 删除指定网络的配置文件
      */
-    public Version saveAsNewVersion(TomlConfig config) {
-        TomlConfig latest = getLatestVersion(config.getNetworkName());
-        Version newVersion;
-        if (latest != null && latest.getVersion() != null) {
-            newVersion = latest.getVersion().nextMinor();
-        } else {
-            newVersion = new Version(1, 0);
+    public synchronized boolean deleteConfig(String networkName) {
+        if (networkName == null || networkName.isEmpty()) {
+            return false;
         }
-        config.setVersion(newVersion);
-        if (saveConfig(config)) {
-            return newVersion;
-        }
-        return null;
-    }
+        String safe = FileSanitizer.sanitize(networkName);
+        boolean deleted = false;
 
-    /**
-     * 删除指定网络的指定版本
-     * 如果是该网络最后一个版本，则等价删除整个网络配置
-     */
-    public boolean deleteConfig(String networkName, Version version) {
-        String fileName = FileSanitizer.sanitize(networkName) + "_" + version.toString() + ".toml";
-        Path file = configsDir.resolve(fileName);
+        Path target = configsDir.resolve(safe + ".toml");
         try {
-            if (Files.exists(file)) {
-                Files.delete(file);
-                LOGGER.info("配置已删除: {}", fileName);
-                return true;
+            if (Files.exists(target)) {
+                Files.delete(target);
+                LOGGER.info("配置已删除: {}", target.getFileName());
+                deleted = true;
             }
-            return false;
         } catch (IOException e) {
-            LOGGER.error("删除配置失败 {}: {}", fileName, e.getMessage());
+            LOGGER.error("删除配置失败 {}: {}", target.getFileName(), e.getMessage());
             return false;
         }
-    }
 
-    /**
-     * 删除指定网络的所有版本
-     */
-    public int deleteNetwork(String networkName) {
-        List<TomlConfig> versions = getVersions(networkName);
-        int count = 0;
-        for (TomlConfig cfg : versions) {
-            if (cfg.getVersion() != null && deleteConfig(networkName, cfg.getVersion())) {
-                count++;
+        // 同时清理同名旧格式文件，避免删除后旧版本“复活”
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(configsDir, "*.toml")) {
+            for (Path file : stream) {
+                Matcher matcher = LEGACY_FILE_NAME.matcher(baseName(file));
+                if (matcher.matches() && safe.equalsIgnoreCase(matcher.group(1))) {
+                    Files.delete(file);
+                    LOGGER.info("旧配置已删除: {}", file.getFileName());
+                    deleted = true;
+                }
             }
+        } catch (IOException e) {
+            LOGGER.warn("清理旧配置失败: {}", e.getMessage());
         }
-        return count;
+
+        // 如果删除的是活动配置，同时清理 base active.json，避免 reload 指向已删除的配置
+        try {
+            ActiveConfig active = readActive();
+            if (active != null && active.network_name != null
+                    && active.network_name.equalsIgnoreCase(networkName)) {
+                Files.deleteIfExists(baseDir.resolve("active.json"));
+            }
+        } catch (Exception e) {
+            LOGGER.warn("清理 active.json 失败: {}", e.getMessage());
+        }
+
+        return deleted;
     }
 
     /**
      * 检查配置文件是否存在
      */
-    public boolean configExists(String networkName, Version version) {
-        String fileName = FileSanitizer.sanitize(networkName) + "_" + version.toString() + ".toml";
-        return Files.exists(configsDir.resolve(fileName));
+    public boolean configExists(String networkName) {
+        if (networkName == null || networkName.isEmpty()) {
+            return false;
+        }
+        return findConfigFile(networkName) != null;
     }
 
     /**
-     * 获取指定网络的下一个可用版本号
+     * 将旧版 <名称>_v<主>.<次>.toml 迁移为 <名称>.toml。
+     * 同一网络存在多个旧版本时，迁移版本号最高的一个；若目标文件已存在则不覆盖。
      */
-    public Version getNextVersion(String networkName) {
-        TomlConfig latest = getLatestVersion(networkName);
-        if (latest != null && latest.getVersion() != null) {
-            return latest.getVersion().nextMinor();
+    private void migrateLegacyFileNames() {
+        if (!Files.exists(configsDir)) {
+            return;
         }
-        return new Version(1, 0);
+        List<Path> legacyFiles = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(configsDir, "*.toml")) {
+            for (Path file : stream) {
+                if (LEGACY_FILE_NAME.matcher(baseName(file)).matches()) {
+                    legacyFiles.add(file);
+                }
+            }
+        } catch (IOException e) {
+            return;
+        }
+        if (legacyFiles.isEmpty()) {
+            return;
+        }
+
+        // 版本号高的优先
+        legacyFiles.sort(Comparator.comparingInt(ConfigManager::legacyVersion).reversed());
+        for (Path file : legacyFiles) {
+            String base = baseName(file);
+            Matcher matcher = LEGACY_FILE_NAME.matcher(base);
+            if (!matcher.matches()) {
+                continue;
+            }
+            String name = matcher.group(1);
+            Path target = configsDir.resolve(name + ".toml");
+            if (Files.exists(target)) {
+                continue;
+            }
+            try {
+                Files.move(file, target, StandardCopyOption.ATOMIC_MOVE);
+                LOGGER.info("已迁移旧配置文件名: {} -> {}", file.getFileName(), target.getFileName());
+            } catch (Exception e) {
+                try {
+                    Files.move(file, target);
+                    LOGGER.info("已迁移旧配置文件名: {} -> {}", file.getFileName(), target.getFileName());
+                } catch (Exception ignored) {
+                    LOGGER.warn("迁移旧配置文件名失败: {}", file.getFileName());
+                }
+            }
+        }
+    }
+
+    private static int legacyVersion(Path file) {
+        Matcher matcher = LEGACY_FILE_NAME.matcher(baseName(file));
+        if (!matcher.matches()) {
+            return Integer.MIN_VALUE;
+        }
+        try {
+            return Integer.parseInt(matcher.group(2)) * 10000 + Integer.parseInt(matcher.group(3));
+        } catch (NumberFormatException e) {
+            return Integer.MIN_VALUE;
+        }
+    }
+
+    private static String baseName(Path file) {
+        String fileName = file.getFileName().toString();
+        if (fileName.toLowerCase().endsWith(".toml")) {
+            return fileName.substring(0, fileName.length() - 5);
+        }
+        return fileName;
     }
 
     // ==================== active.json 管理 ====================
+
+    /**
+     * 服务端自启动开关文件：<baseDir>/server.toml
+     */
+    private Path getServerSwitchFile() {
+        return baseDir.resolve("server.toml");
+    }
+
+    /**
+     * 世界级活动配置文件：<baseDir>/server/<world>/active.json
+     */
+    public Path getWorldActiveFile(String worldName) {
+        String world = worldName != null && !worldName.isEmpty() ? worldName : "world";
+        world = FileSanitizer.sanitize(world);
+        return baseDir.resolve("server").resolve(world).resolve("active.json");
+    }
+
+    /**
+     * 是否启用“世界加载时自动启动 EasyTier”
+     */
+    public boolean isAutoStartOnWorldLoad() {
+        Path file = getServerSwitchFile();
+        if (!Files.exists(file)) {
+            return false;
+        }
+        try {
+            String content = Files.readString(file, StandardCharsets.UTF_8);
+            String[] lines = content.split("\\r?\\n");
+            for (String rawLine : lines) {
+                String line = rawLine.trim();
+                if (line.startsWith("\uFEFF")) {
+                    line = line.substring(1).trim();
+                }
+                if (line.startsWith("#") || line.isEmpty()) {
+                    continue;
+                }
+                int eq = line.indexOf('=');
+                if (eq < 0) {
+                    continue;
+                }
+                String key = line.substring(0, eq).trim();
+                if ("auto_start_on_world_load".equals(key)) {
+                    String value = line.substring(eq + 1).trim();
+                    int comment = value.indexOf('#');
+                    if (comment >= 0) {
+                        value = value.substring(0, comment).trim();
+                    }
+                    return Boolean.parseBoolean(value);
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.warn("读取 server.toml 失败: {}", e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * 写入“世界加载时自动启动 EasyTier”开关（保留 server.toml 中的其他配置）
+     */
+    public boolean setAutoStartOnWorldLoad(boolean enabled) {
+        Path file = getServerSwitchFile();
+        String newLine = "auto_start_on_world_load = " + enabled;
+        List<String> lines = new ArrayList<>();
+        boolean found = false;
+        try {
+            Files.createDirectories(baseDir);
+            if (Files.exists(file)) {
+                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    String trimmed = line.trim();
+                    int eq = trimmed.indexOf('=');
+                    if (!trimmed.startsWith("#") && eq > 0
+                            && "auto_start_on_world_load".equals(trimmed.substring(0, eq).trim())) {
+                        lines.add(newLine);
+                        found = true;
+                    } else {
+                        lines.add(line);
+                    }
+                }
+            }
+            if (!found) {
+                lines.add(newLine);
+            }
+            Files.write(file, lines, StandardCharsets.UTF_8);
+            return true;
+        } catch (IOException e) {
+            LOGGER.error("写入 server.toml 失败: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 读取世界级 active.json
+     */
+    public ActiveConfig readWorldActive(String worldName) {
+        Path file = getWorldActiveFile(worldName);
+        if (!Files.exists(file)) {
+            return null;
+        }
+        try {
+            String content = Files.readString(file, StandardCharsets.UTF_8);
+            if (content.startsWith("\uFEFF")) {
+                content = content.substring(1);
+            }
+            return GSON.fromJson(content, ActiveConfig.class);
+        } catch (Exception e) {
+            LOGGER.warn("读取世界 active.json 失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 写入世界级 active.json
+     */
+    public boolean writeWorldActive(String worldName, ActiveConfig active) {
+        Path file = getWorldActiveFile(worldName);
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, GSON.toJson(active), StandardCharsets.UTF_8);
+            return true;
+        } catch (IOException e) {
+            LOGGER.error("写入世界 active.json 失败: {}", e.getMessage());
+            return false;
+        }
+    }
 
     /**
      * 读取 active.json
@@ -283,6 +476,9 @@ public class ConfigManager {
         }
         try {
             String content = Files.readString(file, StandardCharsets.UTF_8);
+            if (content.startsWith("\uFEFF")) {
+                content = content.substring(1);
+            }
             return GSON.fromJson(content, ActiveConfig.class);
         } catch (Exception e) {
             LOGGER.warn("读取 active.json 失败: {}", e.getMessage());
@@ -305,19 +501,17 @@ public class ConfigManager {
     }
 
     /**
-     * active.json 数据结构
+     * active.json 数据结构（不再包含版本号）
      */
     public static class ActiveConfig {
         public String network_name;
-        public String version;
-        public boolean auto_start;
+        public boolean auto_start = true;
 
         public ActiveConfig() {
         }
 
-        public ActiveConfig(String networkName, String version, boolean autoStart) {
+        public ActiveConfig(String networkName, boolean autoStart) {
             this.network_name = networkName;
-            this.version = version;
             this.auto_start = autoStart;
         }
     }

@@ -1,5 +1,6 @@
 package com.easytier.forge.lan.mixin;
 
+import com.easytier.forge.lan.EasyTierForgeLan;
 import com.easytier.forge.lan.client.AutoConnectConfig;
 import com.easytier.forge.lan.client.EasyTierConfigScreen;
 import com.easytier.forge.lan.platform.PlatformDetector;
@@ -42,7 +43,7 @@ public abstract class DirectConnectScreenMixin extends Screen {
 
         int cx = this.width / 2;
 
-        Path configDir = this.minecraft.gameDirectory.toPath().resolve("config").resolve("easytier_go");
+        Path configDir = EasyTierForgeLan.getConfigDir();
         autoConnectConfig = new AutoConnectConfig(configDir);
 
         for (var child : this.children()) {

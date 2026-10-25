@@ -81,11 +81,11 @@ public final class PlatformDetector {
         }
 
         if (android) {
-            LOGGER.error("EasyTier Fabric LAN 不支持 Android 平台。"
+            LOGGER.error("EasyTier Forge LAN 不支持 Android 平台。"
                     + "EasyTier 在 Android 上需要 VpnService/Magisk 集成，无法通过桌面 CLI 方式调用。"
                     + "替代方案：在 Android 上使用 EasyTier 官方应用建立虚拟网络，然后在 Minecraft 中直接连接虚拟 IP。");
         } else if (detectedPlatform == Platform.UNSUPPORTED || detectedArch == Architecture.UNSUPPORTED) {
-            LOGGER.error("EasyTier Fabric LAN 不支持当前平台：os.name='{}', os.arch='{}'。"
+            LOGGER.error("EasyTier Forge LAN 不支持当前平台：os.name='{}', os.arch='{}'。"
                     + "支持的平台：Windows 10/11 (x86_64/arm64)、Linux glibc (x86_64/aarch64)、macOS 12+ (x86_64/aarch64)。",
                     rawOsName, rawOsArch);
         } else {

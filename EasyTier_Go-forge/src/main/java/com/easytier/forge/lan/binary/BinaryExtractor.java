@@ -31,7 +31,7 @@ import java.util.zip.ZipInputStream;
  * EasyTier CLI 下载与提取器
  * 从 GitHub Releases 下载当前平台对应的 zip 包，
  * 通过镜像列表依次尝试，最后回退原始 GitHub 链接。
- * 解压到 config/easytier-fabric/bin/ 并设置可执行权限。
+ * 解压到 config/easytier_go/bin/ 并设置可执行权限。
  */
 public class BinaryExtractor {
 
