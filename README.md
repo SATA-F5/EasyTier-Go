@@ -100,20 +100,37 @@ resources/easytier/
 ### 服务端命令
 
 ```
-/easytier start <网络名称> <中继服务器> [密码] [版本]   # 启动 EasyTier
-/easytier stop                                                              # 停止 EasyTier
-/easytier status                                                            # 查看运行状态
-/easytier peer                                                              # 查看节点列表
-/easytier node                                                             # 查看本节点信息
-/easytier route                                                             # 查看路由表
-/easytier portforward add <tcp|udp> <端口> <虚拟IP> <MC端口>
-/easytier portforward remove <tcp|udp> <端口>
-/easytier portforward list
-/easytier config list                                                       # 列出所有配置
-/easytier config use <网络名称> [版本]                          # 设置活动配置
-/easytier config save [版本]                                           # 保存当前配置
-/easytier config delete <网络名称> [版本]                      # 删除配置
-/easytier reload                                                            # 从 active.json 重启
+# ==================== 基础控制 ====================
+/easytier start <网络名称> <中继服务器> [密码]                 # 启动 EasyTier，自动生成或加载 <网络名称>.toml
+/easytier stop                                                 # 停止当前 EasyTier 进程
+/easytier status                                               # 查看运行状态、配置文件和虚拟 IP
+/easytier reload                                               # 从 active.json 重启当前配置
+/easytier                                                      # 显示完整用法
+
+# ==================== 节点与路由 ====================
+/easytier peer                                                 # 查看节点列表（含本机，cost=Local）
+/easytier node                                                 # 查看本节点信息
+/easytier route                                                # 查看路由表
+
+# ==================== 端口转发 ====================
+/easytier portforward add <tcp|udp> <绑定端口> <虚拟IP> <MC端口>  # 添加端口转发，如 tcp 25565 10.1.1.2 25565
+/easytier portforward remove <tcp|udp> <绑定端口>               # 移除指定协议和绑定端口的转发
+/easytier portforward list                                     # 查看当前端口转发规则
+
+# ==================== 配置管理 ====================
+/easytier config list                                          # 列出 config/easytier_go/configs/ 下所有配置
+/easytier config use <网络名称>                                 # 设置 active.json 中的活动配置
+/easytier config save                                          # 保存当前运行中的配置（覆盖同名 TOML）
+/easytier config delete <网络名称>                              # 删除指定网络的配置文件
+
+# ==================== 服务器世界自启动 ====================
+/easytier autostart on [网络名称]                               # 开启世界加载自动组网；省略名称时自动选择当前/唯一配置
+/easytier autostart off                                        # 关闭世界加载自动组网
+/easytier autostart status                                     # 查看自启动开关、世界配置和配置文件状态
+/easytier autostart                                            # 等价于 autostart status
+
+# ==================== 兼容旧形式 ====================
+/easytier <网络名称> <中继服务器> [密码]                        # 兼容旧版启动写法，等价于 /easytier start
 ```
 
 兼容旧形式：`/easytier <网络名称> <中继服务器> [密码]`
