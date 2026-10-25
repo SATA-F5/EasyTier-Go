@@ -128,9 +128,6 @@ resources/easytier/
 /easytier autostart off                                        # 关闭世界加载自动组网
 /easytier autostart status                                     # 查看自启动开关、世界配置和配置文件状态
 /easytier autostart                                            # 等价于 autostart status
-
-# ==================== 兼容旧形式 ====================
-/easytier <网络名称> <中继服务器> [密码]                        # 兼容旧版启动写法，等价于 /easytier start
 ```
 
 兼容旧形式：`/easytier <网络名称> <中继服务器> [密码]`
