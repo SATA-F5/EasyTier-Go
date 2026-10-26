@@ -39,7 +39,7 @@ gradlew.bat build
 ./gradlew build
 ```
 
-构建产物位于 `build/libs/easytier-go-1.0.3.jar`
+构建产物位于 `build/libs/easytier-go-1.0.4.jar`
 
 ### 使用系统 Gradle
 
@@ -51,7 +51,7 @@ gradle build
 
 ## 安装方法
 
-1. 将构建好的 `easytier-go-1.0.3.jar` 放入 Minecraft 的 `mods` 文件夹
+1. 将构建好的 `easytier-go-1.0.4.jar` 放入 Minecraft 的 `mods` 文件夹
 2. 确保已安装 Fabric API
 3. 将 EasyTier 二进制放入 `src/main/resources/easytier/` 对应平台目录后重新构建，或手动放置到 `config/easytier-go/bin/`
 4. 启动游戏

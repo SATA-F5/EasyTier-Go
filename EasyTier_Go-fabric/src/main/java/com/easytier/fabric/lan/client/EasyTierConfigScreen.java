@@ -49,6 +49,17 @@ public class EasyTierConfigScreen extends Screen {
     private String currentFileName = "";
     private String selectedNetwork = "";
 
+    // 界面重新 init（窗口缩放、从状态面板返回、下载确认返回）时用于恢复用户输入
+    private boolean hasDraftState = false;
+    private String draftNetworkName = "";
+    private String draftRelayServer = "";
+    private String draftNetworkSecret = "";
+    private String draftDevName = "";
+    private String draftVirtualPort = "25565";
+    private String draftInstanceId = "";
+    private boolean draftPortForward = true;
+    private boolean draftAutoRefresh = false;
+
     // 左栏底部地址区
     private int addrAreaX, addrAreaY, addrAreaW, addrAreaH;
 
@@ -206,6 +217,7 @@ public class EasyTierConfigScreen extends Screen {
         addLabelDyn(rx + halfW + fGap, ry - fLabelH - 1, "虚拟端口", halfW, fLabelH);
         virtualPortField = addTextFieldDyn(rx + halfW + fGap, ry, halfW, fFieldH, "25565");
         virtualPortField.setMaxLength(5);
+        virtualPortField.setNumericOnly(true);
         virtualPortField.setText("25565");
         ry += fFieldH + fGap;
 
