@@ -1,0 +1,6 @@
+71646e964e582ab04b3978080c93e0ae8cdc22aca384ad67de40de81ec0f6f67  easytier_go-forge-1.0.4.jar
+0fdbd5a824dd8d28d6985da8b56dc7041eecd0e9f0073d09c43a1d4e7a9505ff  easytier_go-forge-1.0.4-source.zip
+643a103fc100601188a969eb4f4f27a765d4c85de9626550d66939a6f2322760  easytier_go-forge-1.0.4-sources.jar
+d49e7e3e3b003156c5647df2ca6947239a0ea52d5c8f2372d36bb295ef81bb7c  easytier-go-fabric-1.0.4.jar
+d944d25fd0416dd6ed1c4e860e9fad3a8ecc5d6287d0100af78ce61bef9beae0  easytier-go-fabric-1.0.4-source.zip
+ebed118c28540479ee9ddff053c54d2bc4e63eb3f0f1a415ecb9e7107247a706  easytier-go-fabric-1.0.4-sources.jar
