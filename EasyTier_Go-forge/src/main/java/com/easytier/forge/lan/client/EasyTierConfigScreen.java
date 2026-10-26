@@ -42,6 +42,17 @@ public class EasyTierConfigScreen extends Screen {
     private String currentFileName = "";
     private String selectedNetwork = "";
 
+    // 界面重新 init（窗口缩放、从状态面板返回、下载确认返回）时用于恢复用户输入
+    private boolean hasDraftState = false;
+    private String draftNetworkName = "";
+    private String draftRelayServer = "";
+    private String draftNetworkSecret = "";
+    private String draftDevName = "";
+    private String draftVirtualPort = "25565";
+    private String draftInstanceId = "";
+    private boolean draftPortForward = true;
+    private boolean draftAutoRefresh = false;
+
     private int addrAreaX, addrAreaY, addrAreaW, addrAreaH;
 
     private Button startButton;
@@ -193,8 +204,9 @@ public class EasyTierConfigScreen extends Screen {
                 (btn, val) -> {});
 
         currentInstanceId = TomlConfig.generateInstanceId();
-        updateFileNamePreview();
         refreshConfigList();
+        restoreDraftState();
+        updateFileNamePreview();
 
         int btnY1 = this.height - BTN_ROW_H * 2 - fGap * 2 - 2;
         int btnY2 = this.height - BTN_ROW_H - fGap - 2;
@@ -682,6 +694,64 @@ public class EasyTierConfigScreen extends Screen {
         }
     }
 
+    /**
+     * 保存当前表单内容，供 init() 重新执行时恢复。
+     * 窗口缩放、从状态面板返回、下载确认界面返回都会触发 init()。
+     */
+    private void captureDraftState() {
+        if (networkNameField == null) {
+            return;
+        }
+        draftNetworkName = networkNameField.getValue();
+        draftRelayServer = relayServerField != null ? relayServerField.getValue() : "";
+        draftNetworkSecret = networkSecretField != null ? networkSecretField.getValue() : "";
+        draftDevName = devNameField != null ? devNameField.getValue() : "";
+        draftVirtualPort = virtualPortField != null ? virtualPortField.getValue() : "25565";
+        draftInstanceId = currentInstanceId != null ? currentInstanceId : "";
+        if (portForwardToggle != null) {
+            draftPortForward = portForwardToggle.getValue();
+        }
+        if (autoRefreshToggle != null) {
+            draftAutoRefresh = autoRefreshToggle.getValue();
+        }
+        hasDraftState = true;
+    }
+
+    /**
+     * 恢复上一次的表单内容，避免返回界面后输入被清空。
+     */
+    private void restoreDraftState() {
+        if (!hasDraftState) {
+            return;
+        }
+        if (networkNameField != null) {
+            networkNameField.setValue(draftNetworkName);
+        }
+        if (relayServerField != null) {
+            relayServerField.setValue(draftRelayServer);
+        }
+        if (networkSecretField != null) {
+            networkSecretField.setValue(draftNetworkSecret);
+        }
+        if (devNameField != null) {
+            devNameField.setValue(draftDevName);
+        }
+        if (virtualPortField != null) {
+            virtualPortField.setValue(draftVirtualPort);
+        }
+        if (draftInstanceId != null && !draftInstanceId.isEmpty()) {
+            currentInstanceId = draftInstanceId;
+        }
+        if (portForwardToggle != null) {
+            portForwardToggle.setValue(draftPortForward);
+            onPortForwardToggle(draftPortForward);
+        }
+        if (autoRefreshToggle != null) {
+            autoRefreshToggle.setValue(draftAutoRefresh);
+        }
+        updateFileNamePreview();
+    }
+
     private void updateButtonStates() {
         if (startButton == null) return;
         boolean running = service.isRunning();
@@ -965,6 +1035,7 @@ public class EasyTierConfigScreen extends Screen {
     @Override
     public void tick() {
         super.tick();
+        captureDraftState();
         if (startButton != null) {
             updateButtonStates();
         }

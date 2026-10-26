@@ -1,0 +1,20 @@
+# Gradle
+.gradle/
+build/
+
+# Release artifacts
+release/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Minecraft run directories
+run/
+logs/
+config/
+
+# OS
+.DS_Store
+Thumbs.db
